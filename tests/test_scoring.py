@@ -43,10 +43,11 @@ def test_compute_scores_all_time_and_30_day_windows(tmp_path):
     thirty_day = compute_scores(conn, system_id=30001372, window="30_day")
 
     # All-time includes 3 kills; 30-day includes only the 2 recent ones
-    assert all_time["activity_score"] > thirty_day["activity_score"] or all_time["activity_score"] >= 0
+    assert all_time["activity_score"] > thirty_day["activity_score"]
     assert thirty_day["blop_susceptibility_score"] > all_time["blop_susceptibility_score"]
     # Camping: attacker character_id 1 appears in every kill -> low unique-ratio -> high camping score
     assert thirty_day["camping_score"] > 0
+    assert all_time["camping_score"] == 14.29
     assert 0 <= all_time["overall_risk_score"] <= 100
     assert 0 <= thirty_day["overall_risk_score"] <= 100
 

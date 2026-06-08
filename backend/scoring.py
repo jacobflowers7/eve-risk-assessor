@@ -13,6 +13,9 @@ WEIGHTS = {
 # A reasonable normalization ceiling: kill counts at/above this are treated as "max activity" (100).
 ACTIVITY_NORMALIZATION_CEILING = 50
 
+# Kills with at least this many attackers are considered "fleet-sized" for gang composition scoring.
+FLEET_SIZE_THRESHOLD = 10
+
 
 def _fetch_killmails(conn: sqlite3.Connection, system_id: int, window: str) -> list[sqlite3.Row]:
     conn.row_factory = sqlite3.Row
@@ -55,7 +58,7 @@ def _gang_composition_score(killmails: list) -> float:
     """Returns the percentage of kills that were fleet-sized (10+ attackers) — larger blobs raise risk."""
     if not killmails:
         return 0.0
-    fleet_kills = sum(1 for km in killmails if km["attacker_count"] >= 10)
+    fleet_kills = sum(1 for km in killmails if km["attacker_count"] >= FLEET_SIZE_THRESHOLD)
     return round((fleet_kills / len(killmails)) * 100, 2)
 
 
