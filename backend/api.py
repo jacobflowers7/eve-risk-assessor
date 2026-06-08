@@ -1,6 +1,7 @@
 """FastAPI application exposing system list, lookup, and scoring endpoints."""
 import os
 import sqlite3
+import sys
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import FileResponse
@@ -11,8 +12,13 @@ from backend.fetcher import fetch_and_store_killmails
 from backend.scoring import recompute_and_store
 from backend.systems_data import SYSTEMS
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "..", "data.db")
-FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "..", "frontend")
+if getattr(sys, "frozen", False):
+    BASE_DIR = sys._MEIPASS
+else:
+    BASE_DIR = os.path.join(os.path.dirname(__file__), "..")
+
+DB_PATH = os.path.join(BASE_DIR, "data.db")
+FRONTEND_DIR = os.path.join(BASE_DIR, "frontend")
 
 app = FastAPI()
 app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
