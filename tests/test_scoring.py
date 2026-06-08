@@ -55,7 +55,6 @@ def test_compute_scores_handles_system_with_no_kills(tmp_path):
     conn = get_connection(str(tmp_path / "test.db"))
     init_schema(conn)
     _setup(conn, system_id=30000999)
-    conn.execute("INSERT INTO systems (system_id, name, region) VALUES (30000999, 'Empty', 'Catch')")
     conn.commit()
 
     result = compute_scores(conn, system_id=30000999, window="all_time")
