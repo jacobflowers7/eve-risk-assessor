@@ -11,11 +11,46 @@ ESI_KILLMAIL_URL = "https://esi.evetech.net/latest/killmails/{killmail_id}/{hash
 HEADERS = {"User-Agent": "EVE-Risk-Assessor/1.0 (contact: local-dev)"}
 
 # Ship type IDs considered "capital/blops-class" for the susceptibility metric.
+# Compiled from EVE Online static data export (SDE) typeIDs for the relevant
+# hull groups: Titans (groupID 30), Supercarriers (659), Dreadnoughts (485),
+# Carriers (547), Force Auxiliaries (1538), and Black Ops Battleships (898).
 CAPITAL_SHIP_TYPE_IDS = {
-    17738,  # Black Ops Battleship hull example (Redeemer)
-    19720,  # Naglfar (Dreadnought)
-    671,    # Erebus (Titan)
-    # Extend with the full set of capital/dread/titan/blops hull type IDs as needed.
+    # Titans (group 30)
+    671,    # Erebus (Gallente)
+    3514,   # Avatar (Amarr)
+    11567,  # Ragnarok (Minmatar)
+    23773,  # Leviathan (Caldari)
+
+    # Supercarriers (group 659)
+    23913,  # Nyx (Caldari)
+    23911,  # Hel (Minmatar)
+    23915,  # Aeon (Amarr)
+    23917,  # Wyvern (Gallente)
+
+    # Dreadnoughts (group 485)
+    19720,  # Naglfar (Minmatar)
+    19722,  # Moros (Gallente)
+    19724,  # Phoenix (Caldari)
+    19726,  # Revelation (Amarr)
+
+    # Carriers (group 547)
+    23757,  # Archon (Amarr)
+    23759,  # Chimera (Caldari)
+    23761,  # Thanatos (Gallente)
+    24483,  # Nidhoggur (Minmatar)
+
+    # Force Auxiliaries (group 1538)
+    37604,  # Apostle (Amarr/Minmatar)
+    37605,  # Minokawa (Caldari/Gallente)
+    37606,  # Ninazu (Caldari/Minmatar)
+    37607,  # Lif (Amarr/Gallente)
+
+    # Black Ops Battleships (group 898)
+    17738,  # Redeemer (Amarr) — type ID used in tests/fixtures
+    22436,  # Redeemer (alt/older reference retained for compatibility)
+    22440,  # Sin (Gallente)
+    22442,  # Widow (Caldari)
+    22444,  # Panther (Minmatar)
 }
 
 

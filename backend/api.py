@@ -2,6 +2,7 @@
 import os
 import sqlite3
 import sys
+from datetime import datetime, timedelta, timezone
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import FileResponse
@@ -19,6 +20,9 @@ else:
 
 DB_PATH = os.path.join(BASE_DIR, "data.db")
 FRONTEND_DIR = os.path.join(BASE_DIR, "frontend")
+
+# Skip re-fetching from zKillboard if the system's data was refreshed more recently than this.
+FETCH_STALENESS_MINUTES = 10
 
 app = FastAPI()
 app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
@@ -80,7 +84,21 @@ def get_system_detail(system_id: int, conn: sqlite3.Connection = Depends(get_db_
     if system_row is None:
         raise HTTPException(status_code=404, detail="System not found")
 
-    fetch_and_store_killmails(conn, system_id)
+    last_fetched_at = system_row["last_fetched_at"]
+    should_fetch = True
+    if last_fetched_at:
+        try:
+            last_fetched_dt = datetime.fromisoformat(last_fetched_at)
+            if last_fetched_dt.tzinfo is None:
+                last_fetched_dt = last_fetched_dt.replace(tzinfo=timezone.utc)
+            cutoff = datetime.now(timezone.utc) - timedelta(minutes=FETCH_STALENESS_MINUTES)
+            if last_fetched_dt >= cutoff:
+                should_fetch = False
+        except ValueError:
+            should_fetch = True
+
+    if should_fetch:
+        fetch_and_store_killmails(conn, system_id)
     recompute_and_store(conn, system_id)
 
     score_rows = conn.execute(

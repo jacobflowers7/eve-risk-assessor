@@ -60,3 +60,54 @@ def test_get_system_detail_returns_scores_for_both_windows(client, monkeypatch):
 def test_get_unknown_system_returns_404(client):
     response = client.get("/api/systems/99999999")
     assert response.status_code == 404
+
+
+def test_get_system_detail_skips_fetch_when_recently_fetched(client, monkeypatch):
+    from datetime import datetime, timezone
+
+    calls = {"count": 0}
+
+    def spy(conn, system_id):
+        calls["count"] += 1
+        return 0
+
+    monkeypatch.setattr(api, "fetch_and_store_killmails", spy)
+    monkeypatch.setattr(api, "recompute_and_store", lambda conn, system_id: None)
+
+    conn = next(iter(client.app.dependency_overrides[api.get_db_connection]()))
+    conn.execute(
+        "UPDATE systems SET last_fetched_at = ? WHERE system_id = 30001372",
+        (datetime.now(timezone.utc).isoformat(),),
+    )
+    conn.commit()
+
+    response = client.get("/api/systems/30001372")
+    assert response.status_code == 200
+    assert calls["count"] == 0
+
+
+def test_get_system_detail_fetches_when_stale_or_missing(client, monkeypatch):
+    calls = {"count": 0}
+
+    def spy(conn, system_id):
+        calls["count"] += 1
+        return 0
+
+    monkeypatch.setattr(api, "fetch_and_store_killmails", spy)
+    monkeypatch.setattr(api, "recompute_and_store", lambda conn, system_id: None)
+
+    # last_fetched_at is NULL by default
+    response = client.get("/api/systems/30001372")
+    assert response.status_code == 200
+    assert calls["count"] == 1
+
+    conn = next(iter(client.app.dependency_overrides[api.get_db_connection]()))
+    conn.execute(
+        "UPDATE systems SET last_fetched_at = ? WHERE system_id = 30001372",
+        ("2020-01-01T00:00:00+00:00",),
+    )
+    conn.commit()
+
+    response = client.get("/api/systems/30001372")
+    assert response.status_code == 200
+    assert calls["count"] == 2
