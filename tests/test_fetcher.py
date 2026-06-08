@@ -70,3 +70,31 @@ def test_fetch_and_store_dedupes_existing_killmails(conn, monkeypatch):
     assert inserted == 0
     count = conn.execute("SELECT COUNT(*) FROM killmails").fetchone()[0]
     assert count == 1
+
+
+def test_fetch_and_store_skips_failed_killmail_and_keeps_others(conn, monkeypatch):
+    zkb_response = [
+        {"killmail_id": 100001, "zkb": {"hash": "bad"}},
+        {"killmail_id": 100002, "zkb": {"hash": "good"}},
+    ]
+    esi_response_2 = dict(ESI_KILLMAIL_RESPONSE, killmail_id=100002)
+
+    def fake_get(url, *args, **kwargs):
+        if "zkillboard" in url:
+            return httpx.Response(200, json=zkb_response, request=httpx.Request("GET", url))
+        if "100001" in url:
+            return httpx.Response(500, request=httpx.Request("GET", url))
+        return httpx.Response(200, json=esi_response_2, request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(httpx, "get", fake_get)
+
+    inserted = fetch_and_store_killmails(conn, system_id=30001372)
+
+    assert inserted == 1
+    row = conn.execute(
+        "SELECT killmail_id FROM killmails WHERE killmail_id = 100002"
+    ).fetchone()
+    assert row == (100002,)
+    assert conn.execute(
+        "SELECT killmail_id FROM killmails WHERE killmail_id = 100001"
+    ).fetchone() is None
