@@ -28,8 +28,12 @@ def client(tmp_path, monkeypatch):
     )
     conn.commit()
 
-    monkeypatch.setattr(api, "get_db_connection", lambda: conn)
-    return TestClient(api.app)
+    def override_get_db_connection():
+        yield conn
+
+    api.app.dependency_overrides[api.get_db_connection] = override_get_db_connection
+    yield TestClient(api.app)
+    api.app.dependency_overrides.clear()
 
 
 def test_list_systems_returns_systems_with_scores(client):

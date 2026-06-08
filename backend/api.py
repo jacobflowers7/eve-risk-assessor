@@ -2,7 +2,7 @@
 import os
 import sqlite3
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -18,7 +18,7 @@ app = FastAPI()
 app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
 
 
-def get_db_connection() -> sqlite3.Connection:
+def _init_database() -> None:
     conn = get_connection(DB_PATH)
     init_schema(conn)
     for system in SYSTEMS:
@@ -27,7 +27,18 @@ def get_db_connection() -> sqlite3.Connection:
             (system["system_id"], system["name"], system["region"]),
         )
     conn.commit()
-    return conn
+    conn.close()
+
+
+_init_database()
+
+
+def get_db_connection():
+    conn = get_connection(DB_PATH)
+    try:
+        yield conn
+    finally:
+        conn.close()
 
 
 def _row_to_dict(row: sqlite3.Row) -> dict:
@@ -40,8 +51,7 @@ def index():
 
 
 @app.get("/api/systems")
-def list_systems():
-    conn = get_db_connection()
+def list_systems(conn: sqlite3.Connection = Depends(get_db_connection)):
     conn.row_factory = sqlite3.Row
     rows = conn.execute(
         """SELECT s.system_id, s.name, s.region, s.last_fetched_at,
@@ -50,17 +60,11 @@ def list_systems():
            LEFT JOIN scores sc ON sc.system_id = s.system_id AND sc.window = 'all_time'
            ORDER BY s.region, s.name"""
     ).fetchall()
-    # NOTE: not closing the connection here — in tests, get_db_connection is
-    # monkeypatched to return a single shared connection across multiple
-    # requests/lookups within a test, and closing it would break subsequent
-    # calls. In production, get_connection opens a fresh sqlite3 connection
-    # per call, so leaving it open is harmless for this short-lived CLI/dev app.
     return [_row_to_dict(r) for r in rows]
 
 
 @app.get("/api/systems/{system_id}")
-def get_system_detail(system_id: int):
-    conn = get_db_connection()
+def get_system_detail(system_id: int, conn: sqlite3.Connection = Depends(get_db_connection)):
     conn.row_factory = sqlite3.Row
 
     system_row = conn.execute(
