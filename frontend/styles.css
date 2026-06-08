@@ -1,0 +1,7 @@
+body { font-family: -apple-system, sans-serif; margin: 2rem; }
+#layout { display: flex; gap: 2rem; }
+#system-list { list-style: none; padding: 0; width: 280px; }
+#system-list li { padding: 0.4rem; cursor: pointer; border-bottom: 1px solid #ddd; }
+#system-list li:hover { background: #f0f0f0; }
+table { border-collapse: collapse; }
+table td { border: 1px solid #ccc; padding: 0.3rem 0.6rem; }
