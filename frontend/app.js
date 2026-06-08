@@ -1,7 +1,17 @@
 async function loadSystemList() {
-  const response = await fetch("/api/systems");
-  const systems = await response.json();
   const list = document.getElementById("system-list");
+  let response;
+  try {
+    response = await fetch("/api/systems");
+  } catch (err) {
+    list.textContent = "Could not load system list.";
+    return;
+  }
+  if (!response.ok) {
+    list.textContent = "Could not load system list.";
+    return;
+  }
+  const systems = await response.json();
   list.innerHTML = "";
   for (const system of systems) {
     const item = document.createElement("li");
@@ -25,27 +35,52 @@ async function loadSystemDetail(systemId) {
   const allTime = data.scores.all_time;
   const thirtyDay = data.scores["30_day"];
 
-  detail.innerHTML = `
-    <h2>${data.system.name} (${data.system.region})</h2>
-    <p>Last fetched: ${data.system.last_fetched_at ?? "never"}</p>
-    <h3>All-time</h3>
-    ${renderScoreTable(allTime)}
-    <h3>Last 30 days</h3>
-    ${renderScoreTable(thirtyDay)}
-  `;
+  detail.innerHTML = "";
+
+  const heading = document.createElement("h2");
+  heading.textContent = `${data.system.name} (${data.system.region})`;
+  detail.appendChild(heading);
+
+  const lastFetched = document.createElement("p");
+  lastFetched.textContent = `Last fetched: ${data.system.last_fetched_at ?? "never"}`;
+  detail.appendChild(lastFetched);
+
+  const allTimeHeading = document.createElement("h3");
+  allTimeHeading.textContent = "All-time";
+  detail.appendChild(allTimeHeading);
+  detail.appendChild(renderScoreTable(allTime));
+
+  const thirtyDayHeading = document.createElement("h3");
+  thirtyDayHeading.textContent = "Last 30 days";
+  detail.appendChild(thirtyDayHeading);
+  detail.appendChild(renderScoreTable(thirtyDay));
 }
 
 function renderScoreTable(scores) {
-  if (!scores) return "<p>No data yet.</p>";
-  return `
-    <table>
-      <tr><td>Overall Risk</td><td>${scores.overall_risk_score}</td></tr>
-      <tr><td>Activity</td><td>${scores.activity_score}</td></tr>
-      <tr><td>Camping</td><td>${scores.camping_score}</td></tr>
-      <tr><td>Gang Composition</td><td>${scores.gang_composition_score}</td></tr>
-      <tr><td>Blop/Drop Susceptibility</td><td>${scores.blop_susceptibility_score}</td></tr>
-    </table>
-  `;
+  if (!scores) {
+    const p = document.createElement("p");
+    p.textContent = "No data yet.";
+    return p;
+  }
+  const table = document.createElement("table");
+  const rows = [
+    ["Overall Risk", scores.overall_risk_score],
+    ["Activity", scores.activity_score],
+    ["Camping", scores.camping_score],
+    ["Gang Composition", scores.gang_composition_score],
+    ["Blop/Drop Susceptibility", scores.blop_susceptibility_score],
+  ];
+  for (const [label, value] of rows) {
+    const tr = document.createElement("tr");
+    const tdLabel = document.createElement("td");
+    tdLabel.textContent = label;
+    const tdValue = document.createElement("td");
+    tdValue.textContent = value;
+    tr.appendChild(tdLabel);
+    tr.appendChild(tdValue);
+    table.appendChild(tr);
+  }
+  return table;
 }
 
 loadSystemList();
