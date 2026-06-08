@@ -22,6 +22,9 @@ CREATE TABLE IF NOT EXISTS killmails (
     FOREIGN KEY (system_id) REFERENCES systems(system_id)
 );
 
+CREATE INDEX IF NOT EXISTS idx_killmails_system_time
+    ON killmails (system_id, killmail_time);
+
 CREATE TABLE IF NOT EXISTS scores (
     system_id INTEGER NOT NULL,
     window TEXT NOT NULL CHECK (window IN ('all_time', '30_day')),
