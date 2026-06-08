@@ -29,7 +29,6 @@ def _fetch_killmails(conn: sqlite3.Connection, system_id: int, window: str) -> l
         rows = conn.execute(
             "SELECT * FROM killmails WHERE system_id = ?", (system_id,)
         ).fetchall()
-    conn.row_factory = None
     return rows
 
 
