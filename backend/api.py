@@ -28,7 +28,7 @@ app = FastAPI()
 app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
 
 
-def _init_database() -> None:
+def _init_database() -> sqlite3.Connection:
     conn = get_connection(DB_PATH)
     init_schema(conn)
     for system in SYSTEMS:
@@ -37,18 +37,15 @@ def _init_database() -> None:
             (system["system_id"], system["name"], system["region"]),
         )
     conn.commit()
-    conn.close()
+    return conn
 
 
-_init_database()
+# Single shared connection for the process lifetime — safe for a single-user local app.
+_app_conn = _init_database()
 
 
 def get_db_connection():
-    conn = get_connection(DB_PATH)
-    try:
-        yield conn
-    finally:
-        conn.close()
+    yield _app_conn
 
 
 def _row_to_dict(row: sqlite3.Row) -> dict:
