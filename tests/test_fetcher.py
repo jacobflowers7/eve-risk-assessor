@@ -10,16 +10,22 @@ ZKB_RESPONSE = [
     }
 ]
 
+# ship_type_id 22436 = Redeemer (Black Ops Battleship); has_capital_attacker should flip to 1.
 ESI_KILLMAIL_RESPONSE = {
     "killmail_id": 100001,
     "killmail_time": "2026-05-01T12:00:00Z",
     "solar_system_id": 30001372,
     "victim": {"ship_type_id": 587},
     "attackers": [
-        {"character_id": 1, "corporation_id": 10, "alliance_id": 100, "ship_type_id": 17738},
+        {"character_id": 1, "corporation_id": 10, "alliance_id": 100, "ship_type_id": 22436},
         {"character_id": 2, "corporation_id": 10, "alliance_id": 100, "ship_type_id": 587},
     ],
 }
+
+
+def _make_client(handler) -> httpx.AsyncClient:
+    """An AsyncClient backed by a MockTransport that routes via the test handler."""
+    return httpx.AsyncClient(transport=httpx.MockTransport(handler))
 
 
 @pytest.fixture
@@ -34,24 +40,27 @@ def conn(tmp_path):
     return c
 
 
-def test_fetch_and_store_inserts_new_killmails(conn, monkeypatch):
-    def fake_get(url, *args, **kwargs):
-        if "zkillboard" in url:
-            return httpx.Response(200, json=ZKB_RESPONSE, request=httpx.Request("GET", url))
-        return httpx.Response(200, json=ESI_KILLMAIL_RESPONSE, request=httpx.Request("GET", url))
+def test_fetch_and_store_inserts_new_killmails(conn):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "zkillboard" in str(request.url):
+            return httpx.Response(200, json=ZKB_RESPONSE)
+        return httpx.Response(200, json=ESI_KILLMAIL_RESPONSE)
 
-    monkeypatch.setattr(httpx, "get", fake_get)
-
-    inserted = fetch_and_store_killmails(conn, system_id=30001372)
+    inserted = fetch_and_store_killmails(conn, system_id=30001372, client=_make_client(handler))
 
     assert inserted == 1
     row = conn.execute(
         "SELECT killmail_id, attacker_count, has_capital_attacker FROM killmails WHERE killmail_id = 100001"
     ).fetchone()
-    assert row == (100001, 2, 1)  # ship_type_id 17738 is a Black Ops Battleship (capital-class)
+    assert tuple(row) == (100001, 2, 1)
+    attackers = conn.execute(
+        "SELECT character_id, corporation_id, alliance_id FROM killmail_attackers "
+        "WHERE killmail_id = 100001 ORDER BY character_id"
+    ).fetchall()
+    assert [tuple(r) for r in attackers] == [(1, 10, 100), (2, 10, 100)]
 
 
-def test_fetch_and_store_dedupes_existing_killmails(conn, monkeypatch):
+def test_fetch_and_store_dedupes_existing_killmails(conn):
     conn.execute(
         """INSERT INTO killmails
            (killmail_id, system_id, killmail_time, victim_ship_type_id, attacker_count,
@@ -60,41 +69,63 @@ def test_fetch_and_store_dedupes_existing_killmails(conn, monkeypatch):
     )
     conn.commit()
 
-    def fake_get(url, *args, **kwargs):
-        return httpx.Response(200, json=ZKB_RESPONSE, request=httpx.Request("GET", url))
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=ZKB_RESPONSE)
 
-    monkeypatch.setattr(httpx, "get", fake_get)
-
-    inserted = fetch_and_store_killmails(conn, system_id=30001372)
+    inserted = fetch_and_store_killmails(conn, system_id=30001372, client=_make_client(handler))
 
     assert inserted == 0
     count = conn.execute("SELECT COUNT(*) FROM killmails").fetchone()[0]
     assert count == 1
 
 
-def test_fetch_and_store_skips_failed_killmail_and_keeps_others(conn, monkeypatch):
+def test_fetch_and_store_skips_failed_killmail_and_keeps_others(conn):
     zkb_response = [
         {"killmail_id": 100001, "zkb": {"hash": "bad"}},
         {"killmail_id": 100002, "zkb": {"hash": "good"}},
     ]
     esi_response_2 = dict(ESI_KILLMAIL_RESPONSE, killmail_id=100002)
 
-    def fake_get(url, *args, **kwargs):
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
         if "zkillboard" in url:
-            return httpx.Response(200, json=zkb_response, request=httpx.Request("GET", url))
+            return httpx.Response(200, json=zkb_response)
         if "100001" in url:
-            return httpx.Response(500, request=httpx.Request("GET", url))
-        return httpx.Response(200, json=esi_response_2, request=httpx.Request("GET", url))
+            return httpx.Response(500)
+        return httpx.Response(200, json=esi_response_2)
 
-    monkeypatch.setattr(httpx, "get", fake_get)
-
-    inserted = fetch_and_store_killmails(conn, system_id=30001372)
+    inserted = fetch_and_store_killmails(conn, system_id=30001372, client=_make_client(handler))
 
     assert inserted == 1
     row = conn.execute(
         "SELECT killmail_id FROM killmails WHERE killmail_id = 100002"
     ).fetchone()
-    assert row == (100002,)
+    assert tuple(row) == (100002,)
     assert conn.execute(
         "SELECT killmail_id FROM killmails WHERE killmail_id = 100001"
     ).fetchone() is None
+
+
+def test_fetch_and_store_limits_new_killmail_details(conn):
+    zkb_response = [
+        {"killmail_id": 100001, "zkb": {"hash": "one"}},
+        {"killmail_id": 100002, "zkb": {"hash": "two"}},
+        {"killmail_id": 100003, "zkb": {"hash": "three"}},
+    ]
+    detail_calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if "zkillboard" in url:
+            return httpx.Response(200, json=zkb_response)
+        detail_calls.append(url)
+        killmail_id = int(url.split("/killmails/")[1].split("/")[0])
+        return httpx.Response(200, json=dict(ESI_KILLMAIL_RESPONSE, killmail_id=killmail_id))
+
+    inserted = fetch_and_store_killmails(
+        conn, system_id=30001372, max_details=2, client=_make_client(handler)
+    )
+
+    assert inserted == 2
+    assert len(detail_calls) == 2
+    assert conn.execute("SELECT COUNT(*) FROM killmails").fetchone()[0] == 2

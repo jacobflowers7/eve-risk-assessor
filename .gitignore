@@ -1,8 +1,10 @@
 *.db
 data.db
+data.db*
 __pycache__/
 *.pyc
 venv/
 build/
 dist/
-data.db*
+.DS_Store
+.pytest_cache/

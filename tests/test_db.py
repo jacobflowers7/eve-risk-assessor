@@ -1,4 +1,3 @@
-import sqlite3
 from backend.db import get_connection, init_schema
 
 def test_init_schema_creates_tables(tmp_path):
