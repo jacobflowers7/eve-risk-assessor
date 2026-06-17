@@ -5,6 +5,13 @@ Source: EVE Online Static Data Export (SDE) via the Fuzzwork SQLite dump
 filtered by regionID 10000047 (Providence) and 10000014 (Catch).
 """
 
+# TODO: populate with the verified ice-anomaly system IDs for Providence + Catch.
+# Source options:
+#   - Fuzzwork SDE mapDenormalize joined to invTypes for ice asteroid category
+#   - Community lists (EVE Survival, DOTLAN, EVE-Pirates)
+# Until populated, the "Ice belts only" filter will simply return zero systems.
+ICE_BELT_SYSTEM_IDS: set[int] = set()
+
 SYSTEMS = [
     # --- Catch (regionID 10000014) ---
     {"system_id": 30001170, "name": "1P-WGB", "region": "Catch"},

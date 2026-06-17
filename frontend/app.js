@@ -4,6 +4,7 @@ const state = {
   systems: [],
   region: "All",
   query: "",
+  iceOnly: false,
   selectedSystemId: null,
   sortKey: "thirty_day_overall_risk_score",
   sortDirection: "desc",
@@ -11,6 +12,7 @@ const state = {
 };
 
 const tableColumns = [
+  { key: "_rank", label: "#", type: "rank" },
   { key: "name", label: "System", type: "system" },
   { key: "thirty_day_overall_risk_score", label: "30d Risk", type: "risk" },
   { key: "all_time_overall_risk_score", label: "All-Time", type: "score" },
@@ -165,6 +167,12 @@ function renderTable() {
   const headerRow = document.createElement("tr");
   for (const column of tableColumns) {
     const th = document.createElement("th");
+    if (column.type === "rank") {
+      th.className = "no-sort";
+      th.textContent = column.label;
+      headerRow.appendChild(th);
+      continue;
+    }
     const button = document.createElement("button");
     button.type = "button";
     button.textContent = column.label;
@@ -172,7 +180,7 @@ function renderTable() {
     if (state.sortKey === column.key) {
       const marker = document.createElement("span");
       marker.className = "sort-marker";
-      marker.textContent = state.sortDirection === "asc" ? " asc" : " desc";
+      marker.textContent = state.sortDirection === "asc" ? " ↓" : " ↑";
       button.appendChild(marker);
     }
     th.appendChild(button);
@@ -191,9 +199,9 @@ function renderTable() {
     tr.appendChild(td);
     tbody.appendChild(tr);
   } else {
-    for (const system of rows) {
-      tbody.appendChild(renderSystemRow(system));
-    }
+    rows.forEach((system, index) => {
+      tbody.appendChild(renderSystemRow(system, index + 1));
+    });
   }
   table.appendChild(tbody);
 }
@@ -208,7 +216,7 @@ function updateSort(column) {
   renderTable();
 }
 
-function renderSystemRow(system) {
+function renderSystemRow(system, rank) {
   const tr = document.createElement("tr");
   tr.tabIndex = 0;
   tr.className = system.system_id === state.selectedSystemId ? "selected" : "";
@@ -222,13 +230,14 @@ function renderSystemRow(system) {
 
   for (const column of tableColumns) {
     const td = document.createElement("td");
-    td.appendChild(renderCell(system, column));
+    td.appendChild(renderCell(system, column, rank));
     tr.appendChild(td);
   }
   return tr;
 }
 
-function renderCell(system, column) {
+function renderCell(system, column, rank) {
+  if (column.type === "rank") return renderRankCell(rank);
   if (column.type === "system") return renderSystemCell(system);
   if (column.type === "risk") return renderRiskCell(system);
   if (column.type === "score") return textNode(formatScore(system[column.key]), "score-text");
@@ -238,6 +247,13 @@ function renderCell(system, column) {
     return textNode(system[column.key] || "unknown", `data-label data-${system[column.key] || "unknown"}`);
   }
   return textNode(system[column.key] ?? "-", "");
+}
+
+function renderRankCell(rank) {
+  const span = document.createElement("span");
+  span.className = rank <= 3 ? "rank-cell top" : "rank-cell";
+  span.textContent = String(rank).padStart(2, "0");
+  return span;
 }
 
 function textNode(text, className) {
@@ -251,11 +267,25 @@ function renderSystemCell(system) {
   const wrapper = document.createElement("div");
   wrapper.className = "system-cell";
 
+  const nameLine = document.createElement("div");
+  nameLine.className = "name-line";
+
   const name = document.createElement("strong");
   name.textContent = system.name;
-  wrapper.appendChild(name);
+  nameLine.appendChild(name);
+
+  if (system.has_ice_belt) {
+    const glyph = document.createElement("span");
+    glyph.className = "ice-glyph";
+    glyph.title = "Ice anomaly system";
+    // Crystalline glyph
+    glyph.innerHTML = '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M6 1v10M2 3l8 6M2 9l8-6"/></svg>';
+    nameLine.appendChild(glyph);
+  }
+  wrapper.appendChild(nameLine);
 
   const meta = document.createElement("span");
+  meta.className = "meta";
   meta.textContent = system.region;
   wrapper.appendChild(meta);
   return wrapper;
@@ -290,11 +320,14 @@ function renderRiskCell(system) {
 
 async function loadSystems() {
   const table = byId("systems-table");
-  const regionParam = state.region === "All" ? "" : `?region=${encodeURIComponent(state.region)}`;
+  const params = new URLSearchParams();
+  if (state.region !== "All") params.set("region", state.region);
+  if (state.iceOnly) params.set("ice_only", "true");
+  const qs = params.toString() ? `?${params}` : "";
   table.innerHTML = '<tbody><tr><td class="empty-row">Loading systems</td></tr></tbody>';
 
   try {
-    const response = await fetch(`/api/systems${regionParam}`);
+    const response = await fetch(`/api/systems${qs}`);
     if (!response.ok) throw new Error("System request failed");
     state.systems = await response.json();
     renderTable();
@@ -309,9 +342,11 @@ async function loadScoresForCurrentView() {
   state.loadingScores = true;
   renderRefreshState("Refreshing...");
 
-  const regionParam = state.region === "All" ? "" : `?region=${encodeURIComponent(state.region)}`;
+  const params = new URLSearchParams();
+  if (state.region !== "All") params.set("region", state.region);
+  const qs = params.toString() ? `?${params}` : "";
   try {
-    const response = await fetch(`/api/refresh-all${regionParam}`, { method: "POST" });
+    const response = await fetch(`/api/refresh-all${qs}`, { method: "POST" });
     if (!response.ok) throw new Error("Refresh failed");
     const result = await response.json();
     await loadSystems();
@@ -483,9 +518,19 @@ function initRefresh() {
   byId("refresh-scores").addEventListener("click", loadScoresForCurrentView);
 }
 
+function initIceToggle() {
+  byId("ice-only").addEventListener("change", (event) => {
+    state.iceOnly = event.target.checked;
+    state.selectedSystemId = null;
+    renderDetailEmpty();
+    loadSystems();
+  });
+}
+
 renderRegions();
 renderDetailEmpty();
 initSearch();
 initRefresh();
+initIceToggle();
 renderRefreshState();
 loadSystems();

@@ -81,6 +81,23 @@ def test_list_systems_filters_by_region(client):
     assert response.json() == []
 
 
+def test_list_systems_filters_by_ice_only(client):
+    # Add a second system, flag it as ice-bearing
+    conn = next(iter(client.app.dependency_overrides[api.get_db_connection]()))
+    conn.execute(
+        "INSERT INTO systems (system_id, name, region, has_ice_belt) "
+        "VALUES (30001999, 'ICE-1', 'Providence', 1)"
+    )
+    conn.commit()
+
+    # Without the filter, both systems come back
+    assert len(client.get("/api/systems").json()) == 2
+    # With ice_only, only the flagged one
+    iced = client.get("/api/systems?ice_only=true").json()
+    assert [s["name"] for s in iced] == ["ICE-1"]
+    assert iced[0]["has_ice_belt"] is True
+
+
 def test_get_system_detail_returns_scores_for_both_windows(client, monkeypatch):
     monkeypatch.setattr(api, "fetch_and_store_killmails", lambda conn, system_id, max_details=10: 0)
     monkeypatch.setattr(api, "recompute_and_store", lambda conn, system_id: None)
@@ -114,7 +131,7 @@ def test_refresh_system_endpoint_fetches_and_recomputes(client, monkeypatch):
 
     def fake_fetch(conn, system_id, max_details=10):
         calls["fetch"] += 1
-        assert max_details == 10
+        assert max_details == 100
         return 3
 
     def fake_score(conn, system_id):

@@ -2,17 +2,46 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>EVE Null-Sec Risk Assessor</title>
-  <link rel="stylesheet" href="/static/styles.css" />
+  <link rel="stylesheet" href="/static/styles.css?v=5" />
 </head>
 <body>
-  <h1>Null-Sec Risk Assessor — Providence &amp; Catch</h1>
-  <div id="layout">
-    <ul id="system-list"></ul>
-    <section id="system-detail">
-      <p>Select a system to view its risk assessment.</p>
+  <header class="app-header">
+    <div>
+      <p class="eyebrow">Providence and Catch</p>
+      <h1>EVE Null-Sec Risk Assessor</h1>
+    </div>
+    <div id="table-summary" class="table-summary">Loading systems...</div>
+  </header>
+
+  <main class="app-shell">
+    <section class="table-panel" aria-label="System comparison">
+      <div class="toolbar">
+        <div id="region-tabs" class="region-tabs" aria-label="Region"></div>
+        <div class="toolbar-actions">
+          <label class="ice-toggle">
+            <input id="ice-only" type="checkbox" />
+            <span class="box"></span>
+            <span class="label">Ice belts only</span>
+          </label>
+          <label class="search-field">
+            <span>Search</span>
+            <input id="system-search" type="search" autocomplete="off" placeholder="System name" />
+          </label>
+          <button id="refresh-scores" class="refresh-button" type="button">Load Scores</button>
+          <span id="refresh-status" class="refresh-status"></span>
+        </div>
+      </div>
+
+      <div class="table-wrap">
+        <table id="systems-table" class="systems-table"></table>
+      </div>
     </section>
-  </div>
-  <script src="/static/app.js"></script>
+
+    <aside id="system-detail" class="detail-panel" aria-label="System detail"></aside>
+  </main>
+
+  <script src="/static/app.js?v=5"></script>
 </body>
 </html>

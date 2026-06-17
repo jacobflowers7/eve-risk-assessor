@@ -9,7 +9,8 @@ CREATE TABLE IF NOT EXISTS systems (
     system_id INTEGER PRIMARY KEY,
     name TEXT NOT NULL,
     region TEXT NOT NULL,
-    last_fetched_at TEXT
+    last_fetched_at TEXT,
+    has_ice_belt INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS killmails (
@@ -71,8 +72,17 @@ def get_connection(db_path: str) -> sqlite3.Connection:
 
 def init_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
+    _migrate_add_columns(conn)
     _backfill_attackers(conn)
     conn.commit()
+
+
+def _migrate_add_columns(conn: sqlite3.Connection) -> None:
+    """ALTER TABLE for columns added after the initial schema. CREATE TABLE IF NOT EXISTS
+    won't add new columns to existing tables, so we check each one explicitly."""
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(systems)").fetchall()}
+    if "has_ice_belt" not in cols:
+        conn.execute("ALTER TABLE systems ADD COLUMN has_ice_belt INTEGER NOT NULL DEFAULT 0")
 
 
 def _backfill_attackers(conn: sqlite3.Connection) -> None:

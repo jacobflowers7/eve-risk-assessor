@@ -16,8 +16,13 @@ from backend.fetcher import (
     fetch_and_store_killmails,
     fetch_and_store_killmails_async,
 )
-from backend.scoring import recompute_and_store
-from backend.systems_data import SYSTEMS
+from backend.scoring import (
+    compute_scores,
+    recompute_and_store,
+    recompute_overall_for_all,
+    store_scores,
+)
+from backend.systems_data import ICE_BELT_SYSTEM_IDS, SYSTEMS
 
 if getattr(sys, "frozen", False):
     BASE_DIR = sys._MEIPASS
@@ -29,7 +34,7 @@ FRONTEND_DIR = os.path.join(BASE_DIR, "frontend")
 
 # Skip re-fetching from zKillboard if the system's data was refreshed more recently than this.
 FETCH_STALENESS_MINUTES = 10
-DEFAULT_REFRESH_KILLMAILS = 10
+DEFAULT_REFRESH_KILLMAILS = 100
 REFRESH_ALL_CONCURRENCY = 8
 
 app = FastAPI()
@@ -43,6 +48,15 @@ def _init_database() -> sqlite3.Connection:
         conn.execute(
             "INSERT OR IGNORE INTO systems (system_id, name, region) VALUES (?, ?, ?)",
             (system["system_id"], system["name"], system["region"]),
+        )
+    # Sync ice-belt flags from the source-of-truth set, so editing the set
+    # propagates to existing rows on next launch (INSERT OR IGNORE doesn't update).
+    conn.execute("UPDATE systems SET has_ice_belt = 0")
+    if ICE_BELT_SYSTEM_IDS:
+        placeholders = ",".join("?" for _ in ICE_BELT_SYSTEM_IDS)
+        conn.execute(
+            f"UPDATE systems SET has_ice_belt = 1 WHERE system_id IN ({placeholders})",
+            tuple(ICE_BELT_SYSTEM_IDS),
         )
     conn.commit()
     return conn
@@ -79,6 +93,7 @@ def _row_to_system_summary(row: sqlite3.Row) -> dict:
     summary["data_confidence"] = _confidence_label(
         summary["kill_count_all_time"], summary["last_fetched_at"]
     )
+    summary["has_ice_belt"] = bool(summary.get("has_ice_belt"))
     return summary
 
 
@@ -151,7 +166,7 @@ counts_all AS (
     SELECT system_id, COUNT(*) AS n, MAX(killmail_time) AS last_time
     FROM killmails GROUP BY system_id
 )
-SELECT s.system_id, s.name, s.region, s.last_fetched_at,
+SELECT s.system_id, s.name, s.region, s.last_fetched_at, s.has_ice_belt,
        all_sc.activity_score AS all_time_activity_score,
        all_sc.camping_score AS all_time_camping_score,
        all_sc.gang_composition_score AS all_time_gang_composition_score,
@@ -175,6 +190,7 @@ LEFT JOIN counts_7d c7 ON c7.system_id = s.system_id
 LEFT JOIN counts_30d c30 ON c30.system_id = s.system_id
 LEFT JOIN counts_all call ON call.system_id = s.system_id
 WHERE (? IS NULL OR s.region = ?)
+  AND (? = 0 OR s.has_ice_belt = 1)
 ORDER BY s.region, s.name
 """
 
@@ -182,6 +198,7 @@ ORDER BY s.region, s.name
 @app.get("/api/systems")
 def list_systems(
     region: str | None = None,
+    ice_only: bool = Query(default=False),
     conn: sqlite3.Connection = Depends(get_db_connection),
 ):
     now = datetime.now(timezone.utc)
@@ -192,6 +209,7 @@ def list_systems(
             (now - timedelta(days=7)).isoformat(),
             (now - timedelta(days=30)).isoformat(),
             region, region,
+            1 if ice_only else 0,
         ),
     ).fetchall()
     return [_row_to_system_summary(r) for r in rows]
@@ -215,7 +233,7 @@ def get_system_detail(system_id: int, conn: sqlite3.Connection = Depends(get_db_
 def refresh_system(
     system_id: int,
     force: bool = Query(default=False),
-    max_details: int = Query(default=DEFAULT_REFRESH_KILLMAILS, ge=1, le=50),
+    max_details: int = Query(default=DEFAULT_REFRESH_KILLMAILS, ge=1, le=200),
     conn: sqlite3.Connection = Depends(get_db_connection),
 ):
     return _refresh_system(conn, system_id, force=force, max_details=max_details)
@@ -225,7 +243,7 @@ def refresh_system(
 async def refresh_all(
     region: str | None = None,
     force: bool = Query(default=False),
-    max_details: int = Query(default=DEFAULT_REFRESH_KILLMAILS, ge=1, le=50),
+    max_details: int = Query(default=DEFAULT_REFRESH_KILLMAILS, ge=1, le=200),
     conn: sqlite3.Connection = Depends(get_db_connection),
 ):
     """Fan-out refresh across every system in the (optional) region, bounded by REFRESH_ALL_CONCURRENCY."""
@@ -247,6 +265,7 @@ async def refresh_all(
     succeeded = 0
     failed = 0
     total_inserted = 0
+    refreshed_systems: list[int] = []
 
     async with httpx.AsyncClient(headers=HEADERS) as client:
         async def run_one(system_id: int) -> tuple[int, int]:
@@ -255,9 +274,13 @@ async def refresh_all(
                     inserted = await fetch_and_store_killmails_async(
                         client, conn, system_id, max_details=max_details
                     )
-                    # recompute is sync + holds the write lock; safe to call from async ctx
                     if inserted > 0:
-                        recompute_and_store(conn, system_id)
+                        # Per-metric only; defer the cohort percentile pass until all
+                        # systems have been processed (recompute_overall_for_all below).
+                        for window in ("all_time", "30_day"):
+                            scores = compute_scores(conn, system_id, window)
+                            store_scores(conn, system_id, window, scores)
+                        refreshed_systems.append(system_id)
                     return (1, inserted)
                 except Exception as exc:
                     print(f"refresh-all: system {system_id} failed: {exc}")
@@ -268,12 +291,16 @@ async def refresh_all(
             failed += 1 - ok
             total_inserted += inserted
 
+    if refreshed_systems:
+        recompute_overall_for_all(conn)
+
     return {
         "attempted": len(targets),
         "succeeded": succeeded,
         "failed": failed,
         "inserted": total_inserted,
         "skipped": len(rows) - len(targets),
+        "recomputed": len(refreshed_systems),
     }
 
 

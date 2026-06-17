@@ -12,7 +12,7 @@ ZKB_URL = "https://zkillboard.com/api/kills/systemID/{system_id}/"
 ESI_KILLMAIL_URL = "https://esi.evetech.net/latest/killmails/{killmail_id}/{hash}/"
 
 HEADERS = {"User-Agent": "EVE-Risk-Assessor/1.0 (contact: local-dev)"}
-DEFAULT_MAX_DETAILS = 10
+DEFAULT_MAX_DETAILS = 100
 ZKB_TIMEOUT_SECONDS = 12.0
 ESI_TIMEOUT_SECONDS = 6.0
 ESI_CONCURRENCY = 5  # parallel ESI requests per system
