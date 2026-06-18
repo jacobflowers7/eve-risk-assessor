@@ -479,15 +479,20 @@ function renderKillmailTable(killmails) {
     return '<p class="empty-note">No killmails stored for this system.</p>';
   }
 
-  const rows = killmails.map((killmail) => `
+  const rows = killmails.map((killmail) => {
+    const shipLabel = killmail.victim_ship_name
+      ? escapeHtml(killmail.victim_ship_name)
+      : (killmail.victim_ship_type_id != null ? `#${killmail.victim_ship_type_id}` : "-");
+    return `
     <tr>
       <td>${formatTime(killmail.killmail_time)}</td>
-      <td>${killmail.victim_ship_type_id ?? "-"}</td>
+      <td>${shipLabel}</td>
       <td>${formatNumber(killmail.attacker_count)}</td>
       <td>${killmail.has_capital_attacker ? "Yes" : "No"}</td>
       <td><a href="${escapeHtml(killmail.zkillboard_url)}" target="_blank" rel="noreferrer">Open</a></td>
     </tr>
-  `).join("");
+  `;
+  }).join("");
 
   return `
     <div class="killmail-wrap">

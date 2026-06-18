@@ -42,8 +42,12 @@ def conn(tmp_path):
 
 def test_fetch_and_store_inserts_new_killmails(conn):
     def handler(request: httpx.Request) -> httpx.Response:
-        if "zkillboard" in str(request.url):
+        url = str(request.url)
+        if "zkillboard" in url:
             return httpx.Response(200, json=ZKB_RESPONSE)
+        if "/universe/names" in url:
+            # Echo back any submitted type_ids; victim ship_type_id 587 in fixture.
+            return httpx.Response(200, json=[{"id": 587, "name": "Rifter", "category": "inventory_type"}])
         return httpx.Response(200, json=ESI_KILLMAIL_RESPONSE)
 
     inserted = fetch_and_store_killmails(conn, system_id=30001372, client=_make_client(handler))
@@ -58,6 +62,9 @@ def test_fetch_and_store_inserts_new_killmails(conn):
         "WHERE killmail_id = 100001 ORDER BY character_id"
     ).fetchall()
     assert [tuple(r) for r in attackers] == [(1, 10, 100), (2, 10, 100)]
+    # Ship name resolved and cached
+    name_row = conn.execute("SELECT name FROM type_names WHERE type_id = 587").fetchone()
+    assert name_row is not None and name_row[0] == "Rifter"
 
 
 def test_fetch_and_store_dedupes_existing_killmails(conn):
@@ -118,6 +125,8 @@ def test_fetch_and_store_limits_new_killmail_details(conn):
         url = str(request.url)
         if "zkillboard" in url:
             return httpx.Response(200, json=zkb_response)
+        if "/universe/names" in url:
+            return httpx.Response(200, json=[])
         detail_calls.append(url)
         killmail_id = int(url.split("/killmails/")[1].split("/")[0])
         return httpx.Response(200, json=dict(ESI_KILLMAIL_RESPONSE, killmail_id=killmail_id))

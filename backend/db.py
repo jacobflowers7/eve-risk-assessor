@@ -43,6 +43,11 @@ CREATE INDEX IF NOT EXISTS idx_attackers_system ON killmail_attackers (system_id
 CREATE INDEX IF NOT EXISTS idx_attackers_killmail ON killmail_attackers (killmail_id);
 CREATE INDEX IF NOT EXISTS idx_attackers_corp ON killmail_attackers (system_id, corporation_id);
 
+CREATE TABLE IF NOT EXISTS type_names (
+    type_id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS scores (
     system_id INTEGER NOT NULL,
     window TEXT NOT NULL CHECK (window IN ('all_time', '30_day')),

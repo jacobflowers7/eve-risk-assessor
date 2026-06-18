@@ -43,6 +43,7 @@ def client(tmp_path):
            VALUES (100001, 30001372, ?, ?, ?)""",
         [(1, 10, 100), (2, 11, 101), (3, 12, 102), (4, 13, 103)],
     )
+    conn.execute("INSERT INTO type_names (type_id, name) VALUES (587, 'Rifter')")
     conn.commit()
 
     def override_get_db_connection():
@@ -123,6 +124,7 @@ def test_get_system_killmails_returns_recent_killmail_rows(client):
     assert body[0]["killmail_id"] == 100001
     assert body[0]["attacker_count"] == 4
     assert body[0]["has_capital_attacker"] is True
+    assert body[0]["victim_ship_name"] == "Rifter"
     assert body[0]["zkillboard_url"] == "https://zkillboard.com/kill/100001/"
 
 

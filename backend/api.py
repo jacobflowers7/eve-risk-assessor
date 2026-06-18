@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from backend.db import default_db_path, get_connection, init_schema
 from backend.fetcher import (
     HEADERS,
+    backfill_type_names,
     fetch_and_store_killmails,
     fetch_and_store_killmails_async,
 )
@@ -59,6 +60,16 @@ def _init_database() -> sqlite3.Connection:
             tuple(ICE_BELT_SYSTEM_IDS),
         )
     conn.commit()
+
+    # One-shot: resolve ship names for any killmails already in the DB so the
+    # UI renders human-readable victim ships even before the next refresh.
+    try:
+        added = backfill_type_names(conn)
+        if added:
+            print(f"[startup] Backfilled {added} ship names")
+    except Exception as exc:
+        print(f"[startup] Type-name backfill skipped: {exc}")
+
     return conn
 
 
@@ -318,12 +329,15 @@ def get_system_killmails(
         raise HTTPException(status_code=404, detail="System not found")
 
     rows = conn.execute(
-        """SELECT killmail_id, killmail_time, victim_ship_type_id, attacker_count,
-                  has_capital_attacker, attacker_character_ids,
-                  attacker_corporation_ids, attacker_alliance_ids
-           FROM killmails
-           WHERE system_id = ?
-           ORDER BY killmail_time DESC
+        """SELECT k.killmail_id, k.killmail_time, k.victim_ship_type_id,
+                  tn.name AS victim_ship_name,
+                  k.attacker_count, k.has_capital_attacker,
+                  k.attacker_character_ids, k.attacker_corporation_ids,
+                  k.attacker_alliance_ids
+           FROM killmails k
+           LEFT JOIN type_names tn ON tn.type_id = k.victim_ship_type_id
+           WHERE k.system_id = ?
+           ORDER BY k.killmail_time DESC
            LIMIT ?""",
         (system_id, limit),
     ).fetchall()
