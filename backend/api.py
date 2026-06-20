@@ -23,7 +23,7 @@ from backend.scoring import (
     recompute_overall_for_all,
     store_scores,
 )
-from backend.systems_data import ICE_BELT_SYSTEM_IDS, SYSTEMS
+from backend.systems_data import GATE_COUNTS, ICE_BELT_SYSTEM_IDS, SYSTEMS
 
 if getattr(sys, "frozen", False):
     BASE_DIR = sys._MEIPASS
@@ -58,6 +58,12 @@ def _init_database() -> sqlite3.Connection:
         conn.execute(
             f"UPDATE systems SET has_ice_belt = 1 WHERE system_id IN ({placeholders})",
             tuple(ICE_BELT_SYSTEM_IDS),
+        )
+    # Sync stargate counts (static, baked in systems_data.py).
+    if GATE_COUNTS:
+        conn.executemany(
+            "UPDATE systems SET gate_count = ? WHERE system_id = ?",
+            [(count, sid) for sid, count in GATE_COUNTS.items()],
         )
     conn.commit()
 
@@ -177,7 +183,7 @@ counts_all AS (
     SELECT system_id, COUNT(*) AS n, MAX(killmail_time) AS last_time
     FROM killmails GROUP BY system_id
 )
-SELECT s.system_id, s.name, s.region, s.last_fetched_at, s.has_ice_belt,
+SELECT s.system_id, s.name, s.region, s.last_fetched_at, s.has_ice_belt, s.gate_count,
        all_sc.activity_score AS all_time_activity_score,
        all_sc.camping_score AS all_time_camping_score,
        all_sc.gang_composition_score AS all_time_gang_composition_score,

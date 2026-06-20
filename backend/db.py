@@ -10,7 +10,8 @@ CREATE TABLE IF NOT EXISTS systems (
     name TEXT NOT NULL,
     region TEXT NOT NULL,
     last_fetched_at TEXT,
-    has_ice_belt INTEGER NOT NULL DEFAULT 0
+    has_ice_belt INTEGER NOT NULL DEFAULT 0,
+    gate_count INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS killmails (
@@ -88,6 +89,8 @@ def _migrate_add_columns(conn: sqlite3.Connection) -> None:
     cols = {row["name"] for row in conn.execute("PRAGMA table_info(systems)").fetchall()}
     if "has_ice_belt" not in cols:
         conn.execute("ALTER TABLE systems ADD COLUMN has_ice_belt INTEGER NOT NULL DEFAULT 0")
+    if "gate_count" not in cols:
+        conn.execute("ALTER TABLE systems ADD COLUMN gate_count INTEGER NOT NULL DEFAULT 0")
 
 
 def _backfill_attackers(conn: sqlite3.Connection) -> None:

@@ -16,6 +16,7 @@ const tableColumns = [
   { key: "name", label: "System", type: "system" },
   { key: "thirty_day_overall_risk_score", label: "30d Risk", type: "risk" },
   { key: "all_time_overall_risk_score", label: "All-Time", type: "score" },
+  { key: "gate_count", label: "Gates", type: "number" },
   { key: "kill_count_24h", label: "24h", type: "number" },
   { key: "kill_count_7d", label: "7d", type: "number" },
   { key: "kill_count_30d", label: "30d", type: "number" },
