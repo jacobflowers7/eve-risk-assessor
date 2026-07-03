@@ -43,14 +43,19 @@ def client(tmp_path):
            VALUES (100001, 30001372, ?, ?, ?)""",
         [(1, 10, 100), (2, 11, 101), (3, 12, 102), (4, 13, 103)],
     )
-    conn.execute("INSERT INTO type_names (type_id, name) VALUES (587, 'Rifter')")
+    conn.execute("INSERT INTO type_names (type_id, name, group_id) VALUES (587, 'Rifter', 25)")
     conn.commit()
 
     def override_get_db_connection():
         yield conn
 
     api.app.dependency_overrides[api.get_db_connection] = override_get_db_connection
+    # refresh-all's streaming body opens its own connection from DB_PATH, so
+    # point it at the test database too.
+    original_db_path = api.DB_PATH
+    api.DB_PATH = db_path
     yield TestClient(api.app)
+    api.DB_PATH = original_db_path
     api.app.dependency_overrides.clear()
 
 
@@ -125,6 +130,8 @@ def test_get_system_killmails_returns_recent_killmail_rows(client):
     assert body[0]["attacker_count"] == 4
     assert body[0]["has_capital_attacker"] is True
     assert body[0]["victim_ship_name"] == "Rifter"
+    assert body[0]["victim_class"] == "combat"
+    assert body[0]["player_attacker_count"] == 4
     assert body[0]["zkillboard_url"] == "https://zkillboard.com/kill/100001/"
 
 
@@ -152,7 +159,9 @@ def test_refresh_system_endpoint_fetches_and_recomputes(client, monkeypatch):
     assert calls == {"fetch": 1, "score": 1}
 
 
-def test_refresh_system_skips_recompute_when_no_new_kills(client, monkeypatch):
+def test_refresh_system_recomputes_even_when_no_new_kills(client, monkeypatch):
+    """Kills aging out of the 30-day window must still refresh scores, so a
+    fetch that inserts nothing still triggers a recompute."""
     calls = {"fetch": 0, "score": 0}
 
     monkeypatch.setattr(
@@ -166,32 +175,12 @@ def test_refresh_system_skips_recompute_when_no_new_kills(client, monkeypatch):
 
     response = client.post("/api/systems/30001372/refresh?force=true")
     assert response.status_code == 200
-    assert calls == {"fetch": 1, "score": 0}
+    assert calls == {"fetch": 1, "score": 1}
 
 
-def test_get_system_detail_skips_fetch_when_recently_fetched(client, monkeypatch):
-    calls = {"count": 0}
-
-    def spy(conn, system_id, max_details=10):
-        calls["count"] += 1
-        return 0
-
-    monkeypatch.setattr(api, "fetch_and_store_killmails", spy)
-    monkeypatch.setattr(api, "recompute_and_store", lambda conn, system_id: None)
-
-    conn = next(iter(client.app.dependency_overrides[api.get_db_connection]()))
-    conn.execute(
-        "UPDATE systems SET last_fetched_at = ? WHERE system_id = 30001372",
-        (datetime.now(timezone.utc).isoformat(),),
-    )
-    conn.commit()
-
-    response = client.get("/api/systems/30001372")
-    assert response.status_code == 200
-    assert calls["count"] == 0
-
-
-def test_get_system_detail_fetches_when_stale_or_missing(client, monkeypatch):
+def test_get_system_detail_never_fetches(client, monkeypatch):
+    """Detail is a cached read: row clicks must render instantly even when the
+    system is stale. Refreshing is the explicit POST /refresh endpoint's job."""
     calls = {"count": 0}
 
     def spy(conn, system_id, max_details=10):
@@ -209,17 +198,73 @@ def test_get_system_detail_fetches_when_stale_or_missing(client, monkeypatch):
 
     response = client.get("/api/systems/30001372")
     assert response.status_code == 200
-    assert calls["count"] == 1
+    assert calls["count"] == 0
 
+
+def test_get_system_activity_returns_daily_and_hourly_histograms(client):
+    conn = next(iter(client.app.dependency_overrides[api.get_db_connection]()))
+    now = datetime.now(timezone.utc)
+    # Add a pod kill at the same hour: it must not count in either histogram.
     conn.execute(
-        "UPDATE systems SET last_fetched_at = ? WHERE system_id = 30001372",
-        ("2020-01-01T00:00:00+00:00",),
+        """INSERT INTO killmails
+           (killmail_id, system_id, killmail_time, victim_ship_type_id, attacker_count,
+            player_attacker_count, has_capital_attacker, attacker_character_ids,
+            attacker_corporation_ids, attacker_alliance_ids)
+           VALUES (100002, 30001372, ?, 670, 1, 1, 0, '[1]', '[10]', '[100]')""",
+        ((now - timedelta(hours=3)).isoformat(),),
     )
     conn.commit()
 
-    response = client.get("/api/systems/30001372")
+    response = client.get("/api/systems/30001372/activity")
     assert response.status_code == 200
-    assert calls["count"] == 2
+    body = response.json()
+
+    assert len(body["daily"]) == 30
+    assert sum(d["kills"] for d in body["daily"]) == 1  # ship kill only, pod excluded
+    assert body["daily"][-1]["kills"] + body["daily"][-2]["kills"] == 1
+
+    assert len(body["hourly"]) == 24
+    assert sum(body["hourly"]) == 1
+    kill_hour = (now - timedelta(hours=3)).hour
+    assert body["hourly"][kill_hour] == 1
+
+
+def test_get_top_attackers_ranks_corps_and_uses_cached_names(client, monkeypatch):
+    async def no_network(client_arg, conn_arg, ids):
+        return None
+
+    monkeypatch.setattr(api, "resolve_entity_names", no_network)
+    conn = next(iter(client.app.dependency_overrides[api.get_db_connection]()))
+    now = datetime.now(timezone.utc)
+    # Second killmail: corp 10 appears again (2 killmails), NPC row must not count.
+    conn.execute(
+        """INSERT INTO killmails
+           (killmail_id, system_id, killmail_time, victim_ship_type_id, attacker_count,
+            player_attacker_count, has_capital_attacker, attacker_character_ids,
+            attacker_corporation_ids, attacker_alliance_ids)
+           VALUES (100003, 30001372, ?, 587, 2, 1, 0, '[5, null]', '[10, 999999]', '[100, null]')""",
+        ((now - timedelta(hours=1)).isoformat(),),
+    )
+    conn.executemany(
+        """INSERT INTO killmail_attackers
+           (killmail_id, system_id, character_id, corporation_id, alliance_id)
+           VALUES (100003, 30001372, ?, ?, ?)""",
+        [(5, 10, 100), (None, 999999, None)],  # second row is an NPC rat
+    )
+    conn.execute(
+        "INSERT INTO entity_names (entity_id, name, category) VALUES (10, 'Red Corp', 'corporation')"
+    )
+    conn.commit()
+
+    response = client.get("/api/systems/30001372/top-attackers")
+    assert response.status_code == 200
+    body = response.json()
+
+    corp_ids = [row["corporation_id"] for row in body]
+    assert 999999 not in corp_ids  # NPC-only corp excluded
+    assert corp_ids[0] == 10  # on 2 distinct killmails, everyone else on 1
+    assert body[0]["kill_count"] == 2
+    assert body[0]["name"] == "Red Corp"
 
 
 def test_refresh_all_fans_out_across_systems(client, monkeypatch):
@@ -244,11 +289,17 @@ def test_refresh_all_fans_out_across_systems(client, monkeypatch):
     )
     conn.commit()
 
+    import json as _json
     response = client.post("/api/refresh-all?region=Catch")
     assert response.status_code == 200
-    body = response.json()
-    assert body["attempted"] == 2
-    assert body["succeeded"] == 2
-    assert body["failed"] == 0
-    assert body["inserted"] == 4
+    events = [_json.loads(line) for line in response.text.splitlines() if line.strip()]
+    start = next(e for e in events if e["type"] == "start")
+    complete = next(e for e in events if e["type"] == "complete")
+    progress = [e for e in events if e["type"] == "progress"]
+
+    assert start["total"] == 2
+    assert complete["succeeded"] == 2
+    assert complete["failed"] == 0
+    assert complete["inserted"] == 4
+    assert len(progress) == 2
     assert sorted(seen) == [30001372, 30001373]

@@ -45,26 +45,27 @@ def test_fetch_and_store_inserts_new_killmails(conn):
         url = str(request.url)
         if "zkillboard" in url:
             return httpx.Response(200, json=ZKB_RESPONSE)
-        if "/universe/names" in url:
-            # Echo back any submitted type_ids; victim ship_type_id 587 in fixture.
-            return httpx.Response(200, json=[{"id": 587, "name": "Rifter", "category": "inventory_type"}])
+        if "/universe/types/" in url:
+            # Victim ship_type_id 587 (Rifter) in fixture; frigate group 25.
+            return httpx.Response(200, json={"type_id": 587, "name": "Rifter", "group_id": 25})
         return httpx.Response(200, json=ESI_KILLMAIL_RESPONSE)
 
     inserted = fetch_and_store_killmails(conn, system_id=30001372, client=_make_client(handler))
 
     assert inserted == 1
     row = conn.execute(
-        "SELECT killmail_id, attacker_count, has_capital_attacker FROM killmails WHERE killmail_id = 100001"
+        "SELECT killmail_id, attacker_count, player_attacker_count, has_capital_attacker "
+        "FROM killmails WHERE killmail_id = 100001"
     ).fetchone()
-    assert tuple(row) == (100001, 2, 1)
+    assert tuple(row) == (100001, 2, 2, 1)
     attackers = conn.execute(
         "SELECT character_id, corporation_id, alliance_id FROM killmail_attackers "
         "WHERE killmail_id = 100001 ORDER BY character_id"
     ).fetchall()
     assert [tuple(r) for r in attackers] == [(1, 10, 100), (2, 10, 100)]
-    # Ship name resolved and cached
-    name_row = conn.execute("SELECT name FROM type_names WHERE type_id = 587").fetchone()
-    assert name_row is not None and name_row[0] == "Rifter"
+    # Ship name + group resolved and cached
+    name_row = conn.execute("SELECT name, group_id FROM type_names WHERE type_id = 587").fetchone()
+    assert name_row is not None and tuple(name_row) == ("Rifter", 25)
 
 
 def test_fetch_and_store_dedupes_existing_killmails(conn):
@@ -125,8 +126,8 @@ def test_fetch_and_store_limits_new_killmail_details(conn):
         url = str(request.url)
         if "zkillboard" in url:
             return httpx.Response(200, json=zkb_response)
-        if "/universe/names" in url:
-            return httpx.Response(200, json=[])
+        if "/universe/types/" in url:
+            return httpx.Response(200, json={"type_id": 587, "name": "Rifter", "group_id": 25})
         detail_calls.append(url)
         killmail_id = int(url.split("/killmails/")[1].split("/")[0])
         return httpx.Response(200, json=dict(ESI_KILLMAIL_RESPONSE, killmail_id=killmail_id))

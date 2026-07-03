@@ -11,10 +11,12 @@ from backend.db import write_lock
 ZKB_URL = "https://zkillboard.com/api/kills/systemID/{system_id}/"
 ESI_KILLMAIL_URL = "https://esi.evetech.net/latest/killmails/{killmail_id}/{hash}/"
 ESI_NAMES_URL = "https://esi.evetech.net/latest/universe/names/"
+ESI_TYPE_URL = "https://esi.evetech.net/latest/universe/types/{type_id}/"
 
 # ESI /universe/names accepts up to 1000 IDs per call.
 NAMES_BATCH_SIZE = 1000
 NAMES_TIMEOUT_SECONDS = 10.0
+TYPE_INFO_CONCURRENCY = 8  # parallel /universe/types lookups
 
 HEADERS = {"User-Agent": "EVE-Risk-Assessor/1.0 (contact: local-dev)"}
 DEFAULT_MAX_DETAILS = 100
@@ -67,6 +69,11 @@ CAPITAL_SHIP_TYPE_IDS = {
 
 def _is_capital(attackers: list[dict]) -> bool:
     return any(a.get("ship_type_id") in CAPITAL_SHIP_TYPE_IDS for a in attackers)
+
+
+def _player_count(attackers: list[dict]) -> int:
+    """Attackers with a character_id are real pilots; the rest are NPC rats on the mail."""
+    return sum(1 for a in attackers if a.get("character_id") is not None)
 
 
 async def _fetch_esi_detail(client: httpx.AsyncClient, killmail_id: int, kill_hash: str) -> dict | None:
@@ -133,15 +140,16 @@ def _insert_killmails(
             cursor = conn.execute(
                 """INSERT OR IGNORE INTO killmails
                    (killmail_id, system_id, killmail_time, victim_ship_type_id, attacker_count,
-                    has_capital_attacker, attacker_character_ids, attacker_corporation_ids,
-                    attacker_alliance_ids)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    player_attacker_count, has_capital_attacker, attacker_character_ids,
+                    attacker_corporation_ids, attacker_alliance_ids)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     killmail_id,
                     system_id,
                     detail.get("killmail_time"),
                     detail.get("victim", {}).get("ship_type_id"),
                     len(attackers),
+                    _player_count(attackers),
                     1 if _is_capital(attackers) else 0,
                     json.dumps([a.get("character_id") for a in attackers]),
                     json.dumps([a.get("corporation_id") for a in attackers]),
@@ -173,25 +181,78 @@ def _insert_killmails(
     return inserted
 
 
-async def _resolve_type_names(
+async def _resolve_type_info(
     client: httpx.AsyncClient,
     conn: sqlite3.Connection,
     type_ids: list[int],
 ) -> None:
-    """POST distinct uncached type_ids to ESI /universe/names; store in type_names."""
+    """Fetch name + group_id for uncached type_ids from ESI /universe/types; store in type_names.
+
+    Rows resolved by the old names-only path have a NULL group_id, so those get
+    re-fetched here to pick up the group.
+    """
     distinct = list({tid for tid in type_ids if tid is not None})
     if not distinct:
         return
     placeholders = ",".join("?" for _ in distinct)
     known = {r[0] for r in conn.execute(
-        f"SELECT type_id FROM type_names WHERE type_id IN ({placeholders})",
+        f"SELECT type_id FROM type_names WHERE type_id IN ({placeholders}) AND group_id IS NOT NULL",
         tuple(distinct),
     ).fetchall()}
     unknown = [tid for tid in distinct if tid not in known]
     if not unknown:
         return
 
-    resolved: list[tuple[int, str]] = []
+    sem = asyncio.Semaphore(TYPE_INFO_CONCURRENCY)
+
+    async def fetch_one(tid: int) -> tuple[int, str, int | None] | None:
+        async with sem:
+            try:
+                resp = await client.get(
+                    ESI_TYPE_URL.format(type_id=tid), timeout=NAMES_TIMEOUT_SECONDS
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                if "name" in data:
+                    return (tid, data["name"], data.get("group_id"))
+            except (httpx.HTTPError, ValueError) as exc:
+                print(f"Failed to resolve type {tid}: {exc}")
+            return None
+
+    results = await asyncio.gather(*(fetch_one(tid) for tid in unknown))
+    resolved = [r for r in results if r is not None]
+
+    if resolved:
+        with write_lock:
+            conn.executemany(
+                """INSERT INTO type_names (type_id, name, group_id) VALUES (?, ?, ?)
+                   ON CONFLICT(type_id) DO UPDATE SET
+                       name = excluded.name, group_id = excluded.group_id""",
+                resolved,
+            )
+            conn.commit()
+
+
+async def resolve_entity_names(
+    client: httpx.AsyncClient,
+    conn: sqlite3.Connection,
+    entity_ids: list[int],
+) -> None:
+    """POST distinct uncached corp/alliance/character ids to ESI /universe/names;
+    cache results in entity_names."""
+    distinct = list({eid for eid in entity_ids if eid is not None})
+    if not distinct:
+        return
+    placeholders = ",".join("?" for _ in distinct)
+    known = {r[0] for r in conn.execute(
+        f"SELECT entity_id FROM entity_names WHERE entity_id IN ({placeholders})",
+        tuple(distinct),
+    ).fetchall()}
+    unknown = [eid for eid in distinct if eid not in known]
+    if not unknown:
+        return
+
+    resolved: list[tuple[int, str, str | None]] = []
     for batch_start in range(0, len(unknown), NAMES_BATCH_SIZE):
         batch = unknown[batch_start:batch_start + NAMES_BATCH_SIZE]
         try:
@@ -199,14 +260,14 @@ async def _resolve_type_names(
             resp.raise_for_status()
             for item in resp.json():
                 if "id" in item and "name" in item:
-                    resolved.append((item["id"], item["name"]))
+                    resolved.append((item["id"], item["name"], item.get("category")))
         except (httpx.HTTPError, ValueError) as exc:
-            print(f"Failed to resolve {len(batch)} type names: {exc}")
+            print(f"Failed to resolve {len(batch)} entity names: {exc}")
 
     if resolved:
         with write_lock:
             conn.executemany(
-                "INSERT OR IGNORE INTO type_names (type_id, name) VALUES (?, ?)",
+                "INSERT OR IGNORE INTO entity_names (entity_id, name, category) VALUES (?, ?, ?)",
                 resolved,
             )
             conn.commit()
@@ -225,31 +286,33 @@ async def fetch_and_store_killmails_async(
             detail.get("victim", {}).get("ship_type_id")
             for _, detail in new_killmails
         ]
-        await _resolve_type_names(client, conn, victim_type_ids)
+        await _resolve_type_info(client, conn, victim_type_ids)
     return inserted
 
 
-def backfill_type_names(conn: sqlite3.Connection) -> int:
-    """One-shot: resolve names for every victim_ship_type_id already in the DB
-    but missing from type_names. Returns the count of names added."""
-    rows = conn.execute(
-        """SELECT DISTINCT k.victim_ship_type_id
-           FROM killmails k
-           LEFT JOIN type_names tn ON tn.type_id = k.victim_ship_type_id
-           WHERE k.victim_ship_type_id IS NOT NULL AND tn.type_id IS NULL"""
-    ).fetchall()
-    missing = [r[0] for r in rows]
+_MISSING_TYPE_INFO_SQL = """
+    SELECT DISTINCT k.victim_ship_type_id
+    FROM killmails k
+    LEFT JOIN type_names tn ON tn.type_id = k.victim_ship_type_id
+    WHERE k.victim_ship_type_id IS NOT NULL
+      AND (tn.type_id IS NULL OR tn.group_id IS NULL)
+"""
+
+
+def backfill_type_info(conn: sqlite3.Connection) -> int:
+    """One-shot: resolve name + group for every victim_ship_type_id already in the DB
+    but missing (or missing its group) from type_names. Returns the count resolved."""
+    missing = [r[0] for r in conn.execute(_MISSING_TYPE_INFO_SQL).fetchall()]
     if not missing:
         return 0
 
     async def run():
         async with httpx.AsyncClient(headers=HEADERS) as client:
-            await _resolve_type_names(client, conn, missing)
+            await _resolve_type_info(client, conn, missing)
 
-    before = conn.execute("SELECT COUNT(*) FROM type_names").fetchone()[0]
     asyncio.run(run())
-    after = conn.execute("SELECT COUNT(*) FROM type_names").fetchone()[0]
-    return after - before
+    still_missing = len(conn.execute(_MISSING_TYPE_INFO_SQL).fetchall())
+    return len(missing) - still_missing
 
 
 def fetch_and_store_killmails(

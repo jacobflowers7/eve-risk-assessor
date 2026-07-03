@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS killmails (
     killmail_time TEXT NOT NULL,
     victim_ship_type_id INTEGER,
     attacker_count INTEGER NOT NULL,
+    player_attacker_count INTEGER,
     has_capital_attacker INTEGER NOT NULL DEFAULT 0,
     attacker_character_ids TEXT NOT NULL,
     attacker_corporation_ids TEXT NOT NULL,
@@ -46,7 +47,15 @@ CREATE INDEX IF NOT EXISTS idx_attackers_corp ON killmail_attackers (system_id, 
 
 CREATE TABLE IF NOT EXISTS type_names (
     type_id INTEGER PRIMARY KEY,
-    name TEXT NOT NULL
+    name TEXT NOT NULL,
+    group_id INTEGER
+);
+
+-- Cache of ESI /universe/names lookups for corporations/alliances/characters.
+CREATE TABLE IF NOT EXISTS entity_names (
+    entity_id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    category TEXT
 );
 
 CREATE TABLE IF NOT EXISTS scores (
@@ -56,6 +65,8 @@ CREATE TABLE IF NOT EXISTS scores (
     camping_score REAL NOT NULL,
     gang_composition_score REAL NOT NULL,
     blop_susceptibility_score REAL NOT NULL,
+    hunter_score REAL NOT NULL DEFAULT 0,
+    prey_score REAL NOT NULL DEFAULT 0,
     overall_risk_score REAL NOT NULL,
     computed_at TEXT NOT NULL,
     PRIMARY KEY (system_id, window),
@@ -80,6 +91,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
     _migrate_add_columns(conn)
     _backfill_attackers(conn)
+    _backfill_player_counts(conn)
     conn.commit()
 
 
@@ -91,6 +103,20 @@ def _migrate_add_columns(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE systems ADD COLUMN has_ice_belt INTEGER NOT NULL DEFAULT 0")
     if "gate_count" not in cols:
         conn.execute("ALTER TABLE systems ADD COLUMN gate_count INTEGER NOT NULL DEFAULT 0")
+
+    km_cols = {row["name"] for row in conn.execute("PRAGMA table_info(killmails)").fetchall()}
+    if "player_attacker_count" not in km_cols:
+        conn.execute("ALTER TABLE killmails ADD COLUMN player_attacker_count INTEGER")
+
+    tn_cols = {row["name"] for row in conn.execute("PRAGMA table_info(type_names)").fetchall()}
+    if "group_id" not in tn_cols:
+        conn.execute("ALTER TABLE type_names ADD COLUMN group_id INTEGER")
+
+    score_cols = {row["name"] for row in conn.execute("PRAGMA table_info(scores)").fetchall()}
+    if "hunter_score" not in score_cols:
+        conn.execute("ALTER TABLE scores ADD COLUMN hunter_score REAL NOT NULL DEFAULT 0")
+    if "prey_score" not in score_cols:
+        conn.execute("ALTER TABLE scores ADD COLUMN prey_score REAL NOT NULL DEFAULT 0")
 
 
 def _backfill_attackers(conn: sqlite3.Connection) -> None:
@@ -126,6 +152,30 @@ def _backfill_attackers(conn: sqlite3.Connection) -> None:
             "VALUES (?, ?, ?, ?, ?)",
             rows,
         )
+
+
+def _backfill_player_counts(conn: sqlite3.Connection) -> None:
+    """One-shot migration: derive player_attacker_count (attackers with a character_id,
+    i.e. real pilots rather than NPC rats) from the legacy JSON column."""
+    import json
+
+    rows = conn.execute(
+        "SELECT killmail_id, attacker_character_ids FROM killmails "
+        "WHERE player_attacker_count IS NULL"
+    ).fetchall()
+    if not rows:
+        return
+    updates = []
+    for row in rows:
+        try:
+            char_ids = json.loads(row["attacker_character_ids"])
+        except (TypeError, ValueError):
+            char_ids = []
+        updates.append((sum(1 for c in char_ids if c is not None), row["killmail_id"]))
+    conn.executemany(
+        "UPDATE killmails SET player_attacker_count = ? WHERE killmail_id = ?",
+        updates,
+    )
 
 
 def default_db_path() -> str:

@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>EVE Null-Sec Risk Assessor</title>
-  <link rel="stylesheet" href="/static/styles.css?v=6" />
+  <link rel="stylesheet" href="/static/styles.css?v=11" />
 </head>
 <body>
   <header class="app-header">
@@ -29,8 +29,38 @@
             <span>Search</span>
             <input id="system-search" type="search" autocomplete="off" placeholder="System name" />
           </label>
-          <button id="refresh-scores" class="refresh-button" type="button">Load Scores</button>
+          <button id="refresh-scores" class="refresh-button" type="button"
+            data-tip="Fetch the latest killmails for every system in view and rescore them">Refresh All</button>
           <span id="refresh-status" class="refresh-status"></span>
+          <div id="refresh-progress" class="refresh-progress" aria-hidden="true">
+            <span class="bar"><span class="fill"></span></span>
+          </div>
+          <div id="methodology" class="methodology">
+            <button id="methodology-toggle" class="methodology-toggle" type="button"
+              aria-label="How scoring works" data-tip="How scoring works">?</button>
+            <div class="methodology-panel" role="note">
+              <h3>How Scoring Works</h3>
+              <p>
+                Every score is a <strong>percentile against the other tracked systems</strong>,
+                so 80 means "riskier than 80% of Providence + Catch", not an absolute threat level.
+                Pod kills are excluded (a gank would otherwise count twice) and NPC rats never
+                count as attackers. <strong>Small samples are discounted</strong>: a system with
+                3 kills can't score like one with 300, no matter how bad those 3 look.
+              </p>
+              <dl>
+                <dt>Activity</dt><dd>Kill rate, log-scaled — 10 kills/day saturates at 100.</dd>
+                <dt>Hunters</dt><dd>Share of kills by solo or 2&ndash;3 pilot gangs. The metric that matters most if you mine or rat.</dd>
+                <dt>Prey</dt><dd>Share of victims that were mining or hauling ships — proof that people like you get caught here.</dd>
+                <dt>Camping</dt><dd>How concentrated kills are in a few corps. High = resident campers, not passing traffic.</dd>
+                <dt>Gangs</dt><dd>Share of kills by 10+ pilot fleets.</dd>
+                <dt>Drops</dt><dd>Share of kills involving capital or black-ops attackers.</dd>
+              </dl>
+              <p class="fine">
+                Overall = 25% activity, 20% hunters, 20% prey, 15% camping, 10% gangs, 10% drops.
+                Data: recent killmails from zKillboard + ESI, cached locally and accumulated over time.
+              </p>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -42,6 +72,6 @@
     <aside id="system-detail" class="detail-panel" aria-label="System detail"></aside>
   </main>
 
-  <script src="/static/app.js?v=6"></script>
+  <script src="/static/app.js?v=11"></script>
 </body>
 </html>

@@ -5,11 +5,11 @@ Source: EVE Online Static Data Export (SDE) via the Fuzzwork SQLite dump
 filtered by regionID 10000047 (Providence) and 10000014 (Catch).
 """
 
-# TODO: populate with the verified ice-anomaly system IDs for Providence + Catch.
-# Source options:
-#   - Fuzzwork SDE mapDenormalize joined to invTypes for ice asteroid category
-#   - Community lists (EVE Survival, DOTLAN, EVE-Pirates)
-# Until populated, the "Ice belts only" filter will simply return zero systems.
+# Ice-anomaly system IDs for Providence + Catch. Empty until curated by hand:
+# null-sec ice spawns as cosmic anomalies whose spawn tables are NOT in the SDE,
+# and no public source (DOTLAN, EVE University) publishes a per-system list for
+# these regions (verified 2026-07). Populate from in-game survey / corp intel;
+# the UI disables the "Ice belts only" toggle while this set is empty.
 ICE_BELT_SYSTEM_IDS: set[int] = set()
 
 # Stargate counts per system, sourced from Fuzzwork's SDE mapSolarSystemJumps.
