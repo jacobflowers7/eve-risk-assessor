@@ -6,6 +6,12 @@
       "runtimeExecutable": "venv/bin/python",
       "runtimeArgs": ["-m", "uvicorn", "backend.api:app", "--port", "8731"],
       "port": 8731
+    },
+    {
+      "name": "static-site-preview",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "8732", "--directory", "/private/tmp/claude-501/-Users-jacobaldaco-eve-risk-assessor/c1f8ff0a-63ec-42a3-8559-23dfecdb065c/scratchpad/site"],
+      "port": 8732
     }
   ]
 }

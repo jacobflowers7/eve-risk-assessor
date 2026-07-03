@@ -1,5 +1,9 @@
 const REGIONS = ["All", "Catch", "Providence"];
 
+// GitHub Pages build: no backend, data comes from pre-rendered JSON published
+// on a schedule. The flag is injected into index.html by scripts/publish_static.py.
+const STATIC_MODE = Boolean(window.EVE_STATIC);
+
 const state = {
   systems: [],
   region: "All",
@@ -368,14 +372,21 @@ function renderHuntCell(system) {
 
 async function loadSystems() {
   const table = byId("systems-table");
-  const params = new URLSearchParams();
-  if (state.region !== "All") params.set("region", state.region);
-  if (state.iceOnly) params.set("ice_only", "true");
-  const qs = params.toString() ? `?${params}` : "";
   table.innerHTML = '<tbody><tr><td class="empty-row">Loading systems</td></tr></tbody>';
 
   try {
-    state.systems = await fetchJson(`/api/systems${qs}`);
+    if (STATIC_MODE) {
+      let systems = await fetchJson("data/systems.json");
+      if (state.region !== "All") systems = systems.filter((s) => s.region === state.region);
+      if (state.iceOnly) systems = systems.filter((s) => s.has_ice_belt);
+      state.systems = systems;
+    } else {
+      const params = new URLSearchParams();
+      if (state.region !== "All") params.set("region", state.region);
+      if (state.iceOnly) params.set("ice_only", "true");
+      const qs = params.toString() ? `?${params}` : "";
+      state.systems = await fetchJson(`/api/systems${qs}`);
+    }
     renderTable();
     updateIceToggleAvailability();
   } catch (err) {
@@ -509,6 +520,14 @@ async function selectSystem(systemId) {
   `;
 
   try {
+    if (STATIC_MODE) {
+      const bundle = await fetchJson(`data/systems/${systemId}.json`);
+      if (state.selectedSystemId !== systemId) return;
+      renderSystemDetail(bundle, bundle.killmails, bundle.activity,
+        bundle.top_attackers, bundle.top_attackers_window);
+      return;
+    }
+
     const [detail, killmails, activity, topAttackers30d] = await Promise.all([
       fetchJson(`/api/systems/${systemId}`),
       fetchJson(`/api/systems/${systemId}/killmails?limit=50`),
@@ -583,8 +602,8 @@ function renderSystemDetail(data, killmails, activity, topAttackers, topAttacker
       </div>
     </div>
     <div class="detail-actions">
-      <button id="detail-refresh" class="refresh-button small" type="button"
-        data-tip="Pull the latest killmails for this system from zKillboard and rescore">Update Now</button>
+      ${STATIC_MODE ? "" : `<button id="detail-refresh" class="refresh-button small" type="button"
+        data-tip="Pull the latest killmails for this system from zKillboard and rescore">Update Now</button>`}
       <span class="detail-updated" data-tip="When this system's killmails were last pulled from zKillboard">
         updated ${escapeHtml(formatRelativeTime(system.last_fetched_at))}</span>
     </div>
@@ -623,7 +642,9 @@ function renderSystemDetail(data, killmails, activity, topAttackers, topAttacker
     </section>
   `;
 
-  byId("detail-refresh").addEventListener("click", refreshSelectedSystem);
+  if (!STATIC_MODE) {
+    byId("detail-refresh").addEventListener("click", refreshSelectedSystem);
+  }
 }
 
 function renderSparkline(daily) {
@@ -812,6 +833,25 @@ function initSearch() {
 }
 
 function initRefresh() {
+  if (STATIC_MODE) {
+    // No backend to refresh against: hide the button and show data freshness
+    // from the publish manifest instead.
+    byId("refresh-scores").hidden = true;
+    byId("refresh-progress").hidden = true;
+    const status = byId("refresh-status");
+    const showFreshness = async () => {
+      try {
+        const manifest = await fetchJson(`data/manifest.json?t=${Date.now()}`);
+        status.textContent = `auto-updated ${formatRelativeTime(manifest.generated_at)}`;
+        status.dataset.tip = "This site refreshes its killmail data automatically on a schedule";
+      } catch (err) {
+        status.textContent = "";
+      }
+    };
+    showFreshness();
+    setInterval(showFreshness, 5 * 60 * 1000);
+    return;
+  }
   byId("refresh-scores").addEventListener("click", loadScoresForCurrentView);
 }
 

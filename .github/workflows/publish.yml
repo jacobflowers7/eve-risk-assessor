@@ -1,0 +1,65 @@
+name: Publish site
+
+# Builds the GitHub Pages version: pulls fresh killmails on a schedule, rescores,
+# and publishes the static site. The killmail database persists between runs as
+# a release asset (tag "data") so history keeps accumulating.
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write # update the data-snapshot release asset
+  pages: write
+  id-token: write
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install fastapi httpx
+
+      - name: Restore killmail database from release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release download data --pattern data.db.gz --output data.db.gz; then
+            gunzip -f data.db.gz
+            echo "Restored $(du -h data.db | cut -f1) database"
+          else
+            echo "No data release yet; starting from an empty database"
+          fi
+
+      - name: Fetch killmails, rescore, and export site
+        run: python scripts/publish_static.py --out site
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+      - name: Save killmail database to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gzip -c data.db > data.db.gz
+          gh release upload data data.db.gz --clobber
