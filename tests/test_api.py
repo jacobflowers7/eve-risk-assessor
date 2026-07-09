@@ -229,6 +229,80 @@ def test_get_system_activity_returns_daily_and_hourly_histograms(client):
     assert body["hourly"][kill_hour] == 1
 
 
+def test_get_system_killmails_since_hours_filters_by_time(client):
+    conn = next(iter(client.app.dependency_overrides[api.get_db_connection]()))
+    now = datetime.now(timezone.utc)
+    # An old killmail well outside a 24h window (fixture killmail is 3h old).
+    conn.execute(
+        """INSERT INTO killmails
+           (killmail_id, system_id, killmail_time, victim_ship_type_id, attacker_count,
+            player_attacker_count, has_capital_attacker, attacker_character_ids,
+            attacker_corporation_ids, attacker_alliance_ids)
+           VALUES (100010, 30001372, ?, 587, 1, 1, 0, '[9]', '[90]', '[900]')""",
+        ((now - timedelta(days=5)).isoformat(),),
+    )
+    conn.commit()
+
+    all_rows = client.get("/api/systems/30001372/killmails").json()
+    assert {km["killmail_id"] for km in all_rows} == {100001, 100010}
+
+    recent = client.get("/api/systems/30001372/killmails?since_hours=24").json()
+    assert [km["killmail_id"] for km in recent] == [100001]
+
+
+def test_get_corporation_stats_builds_dossier(client, monkeypatch):
+    async def no_network(client_arg, conn_arg, ids):
+        return None
+
+    monkeypatch.setattr(api, "resolve_entity_names", no_network)
+    conn = next(iter(client.app.dependency_overrides[api.get_db_connection]()))
+    now = datetime.now(timezone.utc)
+    # Corp 10 already has the fixture kill (4 players, capital, Rifter victim in
+    # 30001372). Add a second system and a solo Procurer gank there by corp 10,
+    # plus a pod kill that must not count.
+    conn.execute(
+        "INSERT INTO systems (system_id, name, region) VALUES (30001373, 'F-YH5B', 'Catch')"
+    )
+    conn.execute(
+        "INSERT INTO type_names (type_id, name, group_id) VALUES (17480, 'Procurer', 463)"
+    )
+    conn.executemany(
+        """INSERT INTO killmails
+           (killmail_id, system_id, killmail_time, victim_ship_type_id, attacker_count,
+            player_attacker_count, has_capital_attacker, attacker_character_ids,
+            attacker_corporation_ids, attacker_alliance_ids)
+           VALUES (?, ?, ?, ?, 1, 1, 0, '[1]', '[10]', '[100]')""",
+        [
+            (100020, 30001373, (now - timedelta(hours=6)).isoformat(), 17480),
+            (100021, 30001373, (now - timedelta(hours=5)).isoformat(), 670),  # pod
+        ],
+    )
+    conn.executemany(
+        """INSERT INTO killmail_attackers
+           (killmail_id, system_id, character_id, corporation_id, alliance_id)
+           VALUES (?, ?, 1, 10, 100)""",
+        [(100020, 30001373), (100021, 30001373)],
+    )
+    conn.execute(
+        "INSERT INTO entity_names (entity_id, name, category) VALUES (10, 'Red Corp', 'corporation')"
+    )
+    conn.commit()
+
+    body = client.get("/api/corporations/10").json()
+    assert body["name"] == "Red Corp"
+    assert body["totals"]["killmails"] == 2  # fixture Rifter + Procurer; pod excluded
+    assert body["totals"]["systems_active"] == 2
+    assert body["tactics"]["solo_pct"] == 50.0  # Procurer kill was solo
+    assert body["tactics"]["prey_pct"] == 50.0  # Procurer is a mining barge
+    assert body["tactics"]["capital_pct"] == 50.0  # fixture kill had a capital
+    assert len(body["hourly"]) == 24 and sum(body["hourly"]) == 2
+    top_names = [s["name"] for s in body["top_systems"]]
+    assert set(top_names) == {"Catch", "F-YH5B"}
+
+    # Unknown corp -> 404
+    assert client.get("/api/corporations/424242").status_code == 404
+
+
 def test_get_top_attackers_ranks_corps_and_uses_cached_names(client, monkeypatch):
     async def no_network(client_arg, conn_arg, ids):
         return None

@@ -92,16 +92,18 @@ def export_site(conn, out: Path) -> int:
     systems = api.list_systems(region=None, ice_only=False, conn=conn)
     _write_json(out / "data" / "systems.json", systems)
 
+    linked_corp_ids: set[int] = set()
     for system in systems:
         sid = system["system_id"]
         detail = api.get_system_detail(sid, conn=conn)
-        killmails = api.get_system_killmails(sid, limit=50, conn=conn)
+        killmails = api.get_system_killmails(sid, limit=50, since_hours=None, conn=conn)
         activity = api.get_system_activity(sid, conn=conn)
         top_attackers = api.get_top_attackers(sid, window="30_day", limit=8, conn=conn)
         window_label = "last 30 days"
         if not top_attackers:
             top_attackers = api.get_top_attackers(sid, window="all_time", limit=8, conn=conn)
             window_label = "cached history"
+        linked_corp_ids.update(corp["corporation_id"] for corp in top_attackers)
         _write_json(out / "data" / "systems" / f"{sid}.json", {
             "system": detail["system"],
             "scores": detail["scores"],
@@ -110,6 +112,19 @@ def export_site(conn, out: Path) -> int:
             "top_attackers": top_attackers,
             "top_attackers_window": window_label,
         })
+
+    # Corporation dossiers for every corp the UI links to (Top Hunters lists).
+    # Names were already resolved and cached by get_top_attackers above.
+    for corp_id in sorted(linked_corp_ids):
+        stats = api._corporation_stats(conn, corp_id)
+        if stats is None:
+            continue
+        name_row = conn.execute(
+            "SELECT name FROM entity_names WHERE entity_id = ?", (corp_id,)
+        ).fetchone()
+        stats["name"] = name_row["name"] if name_row else None
+        stats["zkillboard_url"] = f"https://zkillboard.com/corporation/{corp_id}/"
+        _write_json(out / "data" / "corporations" / f"{corp_id}.json", stats)
 
     _write_json(out / "data" / "manifest.json", {
         "generated_at": datetime.now(timezone.utc).isoformat(),

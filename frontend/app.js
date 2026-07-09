@@ -10,10 +10,17 @@ const state = {
   query: "",
   iceOnly: false,
   selectedSystemId: null,
+  killmailFilter: null, // {hours, label} -- set by clicking a kill-count cell
   sortKey: "thirty_day_overall_risk_score",
   sortDirection: "desc",
   loadingScores: false,
   refreshingSystem: false,
+};
+
+const countFilters = {
+  kill_count_24h: { hours: 24, label: "last 24h" },
+  kill_count_7d: { hours: 24 * 7, label: "last 7 days" },
+  kill_count_30d: { hours: 24 * 30, label: "last 30 days" },
 };
 
 const tableColumns = [
@@ -282,7 +289,22 @@ function renderCell(system, column, rank) {
   if (column.type === "risk") return renderRiskCell(system);
   if (column.type === "hunt") return renderHuntCell(system);
   if (column.type === "score") return textNode(formatScore(system[column.key]), "score-text");
-  if (column.type === "number") return textNode(formatNumber(system[column.key]), "numeric");
+  if (column.type === "number") {
+    const filter = countFilters[column.key];
+    if (filter && Number(system[column.key]) > 0) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "numeric count-link";
+      button.textContent = formatNumber(system[column.key]);
+      button.dataset.tip = `Show the killmails behind this number (${filter.label})`;
+      button.addEventListener("click", (event) => {
+        event.stopPropagation();
+        selectSystem(system.system_id, filter);
+      });
+      return button;
+    }
+    return textNode(formatNumber(system[column.key]), "numeric");
+  }
   if (column.type === "time") return textNode(formatTime(system[column.key]), "muted");
   if (column.type === "confidence") {
     const value = system[column.key] || "unknown";
@@ -510,8 +532,15 @@ function renderDetailEmpty() {
   `;
 }
 
-async function selectSystem(systemId) {
+function filterKillmailsByWindow(killmails, filter) {
+  if (!filter) return killmails;
+  const cutoff = Date.now() - filter.hours * 3600 * 1000;
+  return killmails.filter((km) => new Date(km.killmail_time).getTime() >= cutoff);
+}
+
+async function selectSystem(systemId, killmailFilter = null) {
   state.selectedSystemId = systemId;
+  state.killmailFilter = killmailFilter;
   renderTable();
   byId("system-detail").innerHTML = `
     <div class="detail-empty">
@@ -523,14 +552,17 @@ async function selectSystem(systemId) {
     if (STATIC_MODE) {
       const bundle = await fetchJson(`data/systems/${systemId}.json`);
       if (state.selectedSystemId !== systemId) return;
-      renderSystemDetail(bundle, bundle.killmails, bundle.activity,
-        bundle.top_attackers, bundle.top_attackers_window);
+      renderSystemDetail(bundle, filterKillmailsByWindow(bundle.killmails, killmailFilter),
+        bundle.activity, bundle.top_attackers, bundle.top_attackers_window);
       return;
     }
 
+    const killmailParams = new URLSearchParams({ limit: "50" });
+    if (killmailFilter) killmailParams.set("since_hours", String(killmailFilter.hours));
+
     const [detail, killmails, activity, topAttackers30d] = await Promise.all([
       fetchJson(`/api/systems/${systemId}`),
-      fetchJson(`/api/systems/${systemId}/killmails?limit=50`),
+      fetchJson(`/api/systems/${systemId}/killmails?${killmailParams}`),
       fetchJson(`/api/systems/${systemId}/activity`),
       fetchJson(`/api/systems/${systemId}/top-attackers?window=30_day`),
     ]);
@@ -636,7 +668,11 @@ function renderSystemDetail(data, killmails, activity, topAttackers, topAttacker
     <section class="detail-section">
       <div class="section-title">
         <h3>Recent Killmails</h3>
-        <span>${killmails.length} cached</span>
+        <span>${state.killmailFilter
+          ? `${killmails.length} in ${escapeHtml(state.killmailFilter.label)}
+             <button id="killmail-filter-clear" class="filter-clear" type="button"
+               data-tip="Remove the time filter and show all cached killmails">clear</button>`
+          : `${killmails.length} cached`}</span>
       </div>
       ${renderKillmailTable(killmails)}
     </section>
@@ -644,6 +680,10 @@ function renderSystemDetail(data, killmails, activity, topAttackers, topAttacker
 
   if (!STATIC_MODE) {
     byId("detail-refresh").addEventListener("click", refreshSelectedSystem);
+  }
+  const filterClear = byId("killmail-filter-clear");
+  if (filterClear) {
+    filterClear.addEventListener("click", () => selectSystem(system.system_id));
   }
 }
 
@@ -750,11 +790,10 @@ function renderTopAttackers(topAttackers) {
   const rows = topAttackers.map((corp) => {
     const name = corp.name || `Corp #${corp.corporation_id}`;
     const width = Math.max((corp.kill_count / max) * 100, 4);
-    const zkbUrl = `https://zkillboard.com/corporation/${corp.corporation_id}/`;
     return `
       <li class="attacker-row">
-        <a class="attacker-name" href="${escapeHtml(zkbUrl)}" target="_blank" rel="noreferrer"
-          data-tip="Open this corporation on zKillboard">${escapeHtml(name)}</a>
+        <button class="attacker-name" type="button" data-corp-id="${corp.corporation_id}"
+          data-tip="Open this corporation's dossier: tactics, active hours, hunting grounds">${escapeHtml(name)}</button>
         <span class="attacker-last">${formatTime(corp.last_seen)}</span>
         <span class="attacker-kills">${formatNumber(corp.kill_count)}</span>
         <span class="attacker-bar"><span style="width: ${width.toFixed(1)}%"></span></span>
@@ -762,6 +801,108 @@ function renderTopAttackers(topAttackers) {
     `;
   }).join("");
   return `<ul class="attacker-list">${rows}</ul>`;
+}
+
+async function openCorporation(corporationId) {
+  const cameFromSystemId = state.selectedSystemId;
+  byId("system-detail").innerHTML = `
+    <div class="detail-empty">
+      <h2>Loading corporation</h2>
+    </div>
+  `;
+
+  try {
+    const corp = STATIC_MODE
+      ? await fetchJson(`data/corporations/${corporationId}.json`)
+      : await fetchJson(`/api/corporations/${corporationId}`);
+    renderCorporation(corp, cameFromSystemId);
+  } catch (err) {
+    byId("system-detail").innerHTML = `
+      <div class="detail-empty">
+        <h2>Corporation unavailable</h2>
+        <p>No dossier could be loaded for this corporation.</p>
+      </div>
+    `;
+  }
+}
+
+function renderCorporation(corp, cameFromSystemId) {
+  const name = corp.name || `Corp #${corp.corporation_id}`;
+  const totals = corp.totals;
+  const tactics = corp.tactics;
+  const backSystem = state.systems.find((s) => s.system_id === cameFromSystemId);
+  const coverage = `${totals.systems_active} of ${totals.systems_tracked}`;
+  const quietCount = totals.systems_tracked - totals.systems_active;
+
+  const tacticRows = [
+    ["Typical gang size", `${tactics.avg_gang_size} pilots`,
+      "Average number of player attackers on their killmails (allies included)"],
+    ["Solo kills", `${tactics.solo_pct}%`, "Share of kills made by a single pilot"],
+    ["Small-gang kills", `${tactics.small_gang_pct}%`, "Share of kills by 1-3 pilots — hunter profile"],
+    ["Fleet kills", `${tactics.fleet_pct}%`, "Share of kills by 10+ pilot fleets"],
+    ["Prey focus", `${tactics.prey_pct}%`, "Share of victims that were mining or hauling ships"],
+    ["Drop usage", `${tactics.capital_pct}%`, "Share of kills involving capital or black-ops ships"],
+  ].map(([label, value, tip]) => `
+    <div class="stat-row" data-tip="${escapeHtml(tip)}">
+      <span class="stat-label">${label}</span>
+      <span class="stat-value">${escapeHtml(value)}</span>
+    </div>
+  `).join("");
+
+  const groundRows = corp.top_systems.map((sys) => {
+    const max = corp.top_systems[0].kills;
+    const width = Math.max((sys.kills / max) * 100, 4);
+    return `
+      <li class="attacker-row">
+        <button class="attacker-name" type="button" data-system-id="${sys.system_id}"
+          data-tip="Open ${escapeHtml(sys.name)} (${escapeHtml(sys.region)})">${escapeHtml(sys.name)}</button>
+        <span class="attacker-last">${formatTime(sys.last_seen)}</span>
+        <span class="attacker-kills">${formatNumber(sys.kills)}</span>
+        <span class="attacker-bar"><span style="width: ${width.toFixed(1)}%"></span></span>
+      </li>
+    `;
+  }).join("");
+
+  byId("system-detail").innerHTML = `
+    <div class="detail-header">
+      <div>
+        <span class="region-chip">Corporation Dossier</span>
+        <h2>${escapeHtml(name)}</h2>
+        <p class="detail-meta">${escapeHtml(formatNumber(totals.killmails))} kills on record ·
+          ${formatTime(totals.first_seen)} — ${formatTime(totals.last_seen)}</p>
+      </div>
+    </div>
+    <div class="detail-actions">
+      ${backSystem ? `<button id="corp-back" class="refresh-button small" type="button">&larr; ${escapeHtml(backSystem.name)}</button>` : ""}
+      <a class="detail-ext-link" href="${escapeHtml(corp.zkillboard_url)}" target="_blank" rel="noreferrer"
+        data-tip="Full killboard history on zKillboard">zKillboard &nearr;</a>
+    </div>
+    <section class="detail-section">
+      <div class="section-title">
+        <h3>Hunting Tactics</h3>
+        <span>${escapeHtml(formatNumber(totals.killmails))} kills sampled</span>
+      </div>
+      ${tacticRows}
+    </section>
+    <section class="detail-section">
+      <div class="section-title">
+        <h3>Active Hours</h3>
+        <span>EVE time (UTC)</span>
+      </div>
+      ${renderHourHeatmap(corp.hourly)}
+    </section>
+    <section class="detail-section">
+      <div class="section-title">
+        <h3>Hunting Grounds</h3>
+        <span>active in ${escapeHtml(coverage)} systems</span>
+      </div>
+      ${groundRows ? `<ul class="attacker-list">${groundRows}</ul>` : '<p class="empty-note">No systems on record.</p>'}
+      <p class="heat-note">${quietCount} tracked systems have no recorded kills from this corporation.</p>
+    </section>
+  `;
+
+  const back = byId("corp-back");
+  if (back) back.addEventListener("click", () => selectSystem(cameFromSystemId));
 }
 
 const confidenceTips = {
@@ -823,6 +964,22 @@ function renderKillmailTable(killmails) {
       </table>
     </div>
   `;
+}
+
+function initDetailNavigation() {
+  // The detail panel re-renders via innerHTML, so navigation clicks (corp names,
+  // hunting-ground systems) are delegated from the panel itself.
+  byId("system-detail").addEventListener("click", (event) => {
+    const corpButton = event.target.closest("[data-corp-id]");
+    if (corpButton) {
+      openCorporation(Number(corpButton.dataset.corpId));
+      return;
+    }
+    const systemButton = event.target.closest("[data-system-id]");
+    if (systemButton) {
+      selectSystem(Number(systemButton.dataset.systemId));
+    }
+  });
 }
 
 function initSearch() {
@@ -935,5 +1092,6 @@ initRefresh();
 initIceToggle();
 initMethodology();
 initTooltips();
+initDetailNavigation();
 renderRefreshState();
 loadSystems();

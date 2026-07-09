@@ -384,6 +384,7 @@ async def refresh_all(
 def get_system_killmails(
     system_id: int,
     limit: int = Query(default=50, ge=1, le=200),
+    since_hours: int | None = Query(default=None, ge=1, le=24 * 365),
     conn: sqlite3.Connection = Depends(get_db_connection),
 ):
     system_row = conn.execute(
@@ -393,8 +394,15 @@ def get_system_killmails(
     if system_row is None:
         raise HTTPException(status_code=404, detail="System not found")
 
+    params: list = [system_id]
+    time_clause = ""
+    if since_hours is not None:
+        time_clause = "AND k.killmail_time >= ?"
+        params.append((datetime.now(timezone.utc) - timedelta(hours=since_hours)).isoformat())
+    params.append(limit)
+
     rows = conn.execute(
-        """SELECT k.killmail_id, k.killmail_time, k.victim_ship_type_id,
+        f"""SELECT k.killmail_id, k.killmail_time, k.victim_ship_type_id,
                   tn.name AS victim_ship_name,
                   tn.group_id AS victim_group_id,
                   k.attacker_count,
@@ -404,10 +412,10 @@ def get_system_killmails(
                   k.attacker_alliance_ids
            FROM killmails k
            LEFT JOIN type_names tn ON tn.type_id = k.victim_ship_type_id
-           WHERE k.system_id = ?
+           WHERE k.system_id = ? {time_clause}
            ORDER BY k.killmail_time DESC
            LIMIT ?""",
-        (system_id, limit),
+        params,
     ).fetchall()
 
     killmails = []
@@ -539,3 +547,119 @@ def get_top_attackers(
         }
         for row in rows
     ]
+
+
+def _corporation_stats(conn: sqlite3.Connection, corporation_id: int) -> dict | None:
+    """Aggregate a corporation's attacker-side record across all cached killmails.
+
+    Pods are excluded (consistent with scoring); NPC rows never match because the
+    corp must appear alongside a character_id.
+    """
+    km_rows = conn.execute(
+        """SELECT DISTINCT a.killmail_id, k.system_id, k.killmail_time,
+                  COALESCE(k.player_attacker_count, k.attacker_count) AS player_attacker_count,
+                  k.has_capital_attacker, k.victim_ship_type_id,
+                  tn.group_id AS victim_group_id
+           FROM killmail_attackers a
+           JOIN killmails k ON k.killmail_id = a.killmail_id
+           LEFT JOIN type_names tn ON tn.type_id = k.victim_ship_type_id
+           WHERE a.corporation_id = ? AND a.character_id IS NOT NULL""",
+        (corporation_id,),
+    ).fetchall()
+
+    ship_kills = [
+        km for km in km_rows
+        if not (km["victim_ship_type_id"] in CAPSULE_TYPE_IDS or km["victim_group_id"] == 29)
+    ]
+    if not ship_kills:
+        return None
+
+    n = len(ship_kills)
+    times = sorted(km["killmail_time"] for km in ship_kills)
+    gang_sizes = [km["player_attacker_count"] for km in ship_kills]
+
+    def pct(count: int) -> float:
+        return round(count / n * 100, 1)
+
+    hourly = [0] * 24
+    per_system: dict[int, dict] = {}
+    for km in ship_kills:
+        try:
+            hourly[_parse_hour(km["killmail_time"])] += 1
+        except ValueError:
+            pass
+        entry = per_system.setdefault(km["system_id"], {"kills": 0, "last_seen": ""})
+        entry["kills"] += 1
+        entry["last_seen"] = max(entry["last_seen"], km["killmail_time"])
+
+    system_names = {
+        row["system_id"]: row
+        for row in conn.execute("SELECT system_id, name, region FROM systems").fetchall()
+    }
+    top_systems = [
+        {
+            "system_id": sid,
+            "name": system_names[sid]["name"] if sid in system_names else str(sid),
+            "region": system_names[sid]["region"] if sid in system_names else "?",
+            "kills": entry["kills"],
+            "last_seen": entry["last_seen"],
+        }
+        for sid, entry in sorted(per_system.items(), key=lambda kv: -kv[1]["kills"])
+    ][:12]
+
+    return {
+        "corporation_id": corporation_id,
+        "totals": {
+            "killmails": n,
+            "first_seen": times[0],
+            "last_seen": times[-1],
+            "systems_active": len(per_system),
+            "systems_tracked": len(system_names),
+        },
+        "tactics": {
+            "avg_gang_size": round(sum(gang_sizes) / n, 1),
+            "solo_pct": pct(sum(1 for g in gang_sizes if g == 1)),
+            "small_gang_pct": pct(sum(1 for g in gang_sizes if 1 <= g <= 3)),
+            "fleet_pct": pct(sum(1 for g in gang_sizes if g >= 10)),
+            "prey_pct": pct(sum(
+                1 for km in ship_kills
+                if km["victim_group_id"] in PREY_GROUP_IDS
+                or km["victim_ship_type_id"] in PREY_TYPE_IDS
+            )),
+            "capital_pct": pct(sum(1 for km in ship_kills if km["has_capital_attacker"])),
+        },
+        "hourly": hourly,
+        "top_systems": top_systems,
+    }
+
+
+def _parse_hour(killmail_time: str) -> int:
+    # ISO timestamps: hour lives at a fixed offset ("2026-07-03T14:05:00Z").
+    return int(killmail_time[11:13])
+
+
+@app.get("/api/corporations/{corporation_id}")
+def get_corporation_stats(
+    corporation_id: int,
+    conn: sqlite3.Connection = Depends(get_db_connection),
+):
+    """Attacker-side dossier for one corporation: tactics profile, active hours,
+    and hunting grounds across every cached killmail."""
+    stats = _corporation_stats(conn, corporation_id)
+    if stats is None:
+        raise HTTPException(status_code=404, detail="No recorded kills for this corporation")
+
+    try:
+        async def resolve():
+            async with httpx.AsyncClient(headers=HEADERS) as client:
+                await resolve_entity_names(client, conn, [corporation_id])
+        asyncio.run(resolve())
+    except Exception as exc:
+        print(f"corporation stats: name resolution skipped: {exc}")
+
+    name_row = conn.execute(
+        "SELECT name FROM entity_names WHERE entity_id = ?", (corporation_id,)
+    ).fetchone()
+    stats["name"] = name_row["name"] if name_row else None
+    stats["zkillboard_url"] = f"https://zkillboard.com/corporation/{corporation_id}/"
+    return stats

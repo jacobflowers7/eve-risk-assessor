@@ -691,6 +691,22 @@ button, input {
   font-size: 11px;
 }
 
+/* Kill-count cells double as filters */
+
+.count-link {
+  padding: 0;
+  border: none;
+  border-bottom: 1px dotted var(--eve-text-dim);
+  background: transparent;
+  cursor: pointer;
+  transition: color 0.12s ease-out, border-color 0.12s ease-out;
+}
+
+.count-link:hover {
+  color: var(--eve-accent-bright);
+  border-bottom-color: var(--eve-accent);
+}
+
 /* Confidence label */
 
 .data-label {
@@ -1026,6 +1042,73 @@ button, input {
   line-height: 1.4;
 }
 
+/* Killmail filter chip */
+
+.filter-clear {
+  margin-left: 6px;
+  padding: 1px 7px;
+  border: 1px solid var(--eve-accent);
+  background: var(--eve-accent-dim);
+  color: var(--eve-accent-bright);
+  cursor: pointer;
+  font-family: var(--eve-font-display);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  transition: all 0.12s ease-out;
+}
+
+.filter-clear:hover {
+  background: var(--eve-accent-soft);
+  box-shadow: 0 0 6px var(--eve-glow);
+}
+
+/* Corporation dossier */
+
+.stat-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(42, 51, 64, 0.5);
+  cursor: help;
+}
+
+.stat-row:last-of-type { border-bottom: none; }
+
+.stat-label {
+  color: var(--eve-text-sub);
+  font-family: var(--eve-font-display);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.stat-value {
+  color: var(--eve-text-bright);
+  font-family: var(--eve-font-mono);
+  font-size: 13px;
+}
+
+.detail-ext-link {
+  color: var(--eve-accent);
+  font-family: var(--eve-font-display);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  text-decoration: none;
+  transition: all 0.12s ease-out;
+}
+
+.detail-ext-link:hover {
+  color: var(--eve-accent-bright);
+  text-shadow: 0 0 6px var(--eve-glow);
+}
+
 /* Top hunters list */
 
 .attacker-list {
@@ -1052,11 +1135,16 @@ button, input {
 .attacker-name {
   grid-area: name;
   overflow: hidden;
+  padding: 0;
+  border: none;
+  background: transparent;
   color: var(--eve-text);
+  cursor: pointer;
   font-family: var(--eve-font-display);
   font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.04em;
+  text-align: left;
   text-decoration: none;
   text-overflow: ellipsis;
   white-space: nowrap;
